@@ -1,0 +1,946 @@
+
+let THREE;
+try {
+  THREE = await import("https://unpkg.com/three@0.160.0/build/three.module.js");
+} catch (primaryError) {
+  console.warn("NOVA WORLD: primary Three.js CDN failed, trying fallback.", primaryError);
+  THREE = await import("https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js");
+}
+
+const state = {
+  gender:"male", serverConnected:false, remotePlayers:new Map(), remoteVoice:[],
+  user:"Player", cash:250000, energy:100, location:"Lagos", country:"Nigeria", inCar:false, inBike:false,
+  car:null, skin:0x7a4d34, outfit:0x2c6e9e, hair:0x17120f, characterName:"Player",
+  messages:[
+    {from:"Maya",text:"Welcome to NOVA WORLD 👋"},
+    {from:"NOVA Bank",text:"Your new account is ready."}
+  ],
+  contacts:["Maya","NOVA Bank"],
+  owned:["NOVA City"],
+  homes:["Starter Apartment"], homeOwned:false, selectedCar:null, nearestBuilding:null, joystick:{x:0,y:0}, gameClock:Date.now(), dob:"", age:18, contacts:["Maya","NOVA Bank"], onlineUsers:[], lands:[], mansions:[], businesses:[], visas:[], audioOn:false, audioStarted:false, walkPhase:0, velocityY:0, onGround:true, sprint:false, jumpQueued:false, headlights:true, rainShelter:false
+};
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x86a9bd);
+scene.fog=new THREE.Fog(0x86a9bd,80,500);
+const camera=new THREE.PerspectiveCamera(62,innerWidth/innerHeight,.1,900);
+const isMobileDevice=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||innerWidth<800;
+let renderer;
+try {
+  renderer=new THREE.WebGLRenderer({antialias:false,powerPreference:"default",failIfMajorPerformanceCaveat:false});
+} catch (rendererError) {
+  console.error("NOVA WORLD renderer initialization failed:", rendererError);
+  try { renderer=new THREE.WebGLRenderer({antialias:false}); }
+  catch (fallbackRendererError) { throw new Error("NOVA WORLD could not initialize WebGL: "+(fallbackRendererError?.message||fallbackRendererError)); }
+}
+renderer.setPixelRatio(isMobileDevice?Math.min(devicePixelRatio,1.15):Math.min(devicePixelRatio,1.35));
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.autoUpdate=true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xd9f2ff,0x32442f,1.5));
+const sun=new THREE.DirectionalLight(0xffffff,2.0);sun.position.set(100,180,80);sun.castShadow=true;sun.shadow.mapSize.set(512,512);sun.shadow.camera.near=1;sun.shadow.camera.far=420;sun.shadow.camera.left=-180;sun.shadow.camera.right=180;sun.shadow.camera.top=180;sun.shadow.camera.bottom=-180;scene.add(sun);
+
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(620,620),new THREE.MeshStandardMaterial({color:0x263c32,roughness:1}));
+ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+
+function box(w,h,d,c,x,y,z,windowed=false){
+  const g=new THREE.Group();
+  const m=new THREE.MeshStandardMaterial({color:c,roughness:.8});
+  const b=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);b.position.y=h/2;b.castShadow=true;b.receiveShadow=true;g.add(b);
+  if(windowed){
+    const wm=new THREE.MeshStandardMaterial({color:0x31576a,metalness:.2,roughness:.25});
+    for(let yy=1.8;yy<h-.5;yy+=2.2) for(let xx=-w/2+1.2;xx<w/2-.4;xx+=2.2){
+      const win=new THREE.Mesh(new THREE.BoxGeometry(.75,.65,.04),wm);win.position.set(xx,yy,d/2+.03);g.add(win);
+      const win2=win.clone();win2.position.z=-d/2-.03;g.add(win2);
+    }
+  }
+  g.position.set(x,0,z);scene.add(g);return g;
+}
+function road(w,d,x,z){
+  const m=new THREE.MeshStandardMaterial({color:0x20252a});
+  const r=new THREE.Mesh(new THREE.BoxGeometry(w,.05,d),m);r.position.set(x,.03,z);scene.add(r);
+  const lm=new THREE.MeshStandardMaterial({color:0xd8c56b});
+  for(let p=-Math.max(w,d)/2;p<Math.max(w,d)/2;p+=10){
+    const line=new THREE.Mesh(new THREE.BoxGeometry(w>d?5:.18,.02,w>d?.18:5),lm);
+    line.position.set(x+(w>d?p:0),.07,z+(w>d?0:p));scene.add(line);
+  }
+}
+road(620,20,0,0);road(20,620,0,0);road(620,16,0,110);road(16,620,120,0);
+
+box(42,32,38,0x596879,-75,0,-65,true);
+box(60,50,42,0x7b6a5c,70,0,-75,true);
+box(32,24,30,0x596b61,-70,0,75,true);
+box(55,70,38,0x445a6b,82,0,75,true);
+box(35,20,35,0x8a735e,-115,0,135,false);
+box(70,28,48,0x625f68,10,0,155,true);
+box(44,18,35,0x74665a,-125,0,-145,true);
+box(28,26,28,0x5e6871,145,0,-130,true);
+
+const water=new THREE.Mesh(new THREE.PlaneGeometry(250,120),new THREE.MeshStandardMaterial({color:0x1d6680,roughness:.2,metalness:.1}));
+water.rotation.x=-Math.PI/2;water.position.set(-210,.02,95);scene.add(water);
+const beach=new THREE.Mesh(new THREE.PlaneGeometry(250,22),new THREE.MeshStandardMaterial({color:0xd9c28a,roughness:1}));beach.rotation.x=-Math.PI/2;beach.position.set(-210,.035,33);scene.add(beach);
+for(let i=0;i<10;i++){const palm=makePalm?makePalm(-300+i*20,18+Math.sin(i)*5):null;}
+function makePalm(x,z){const g=new THREE.Group();const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.22,.38,5.5,8),new THREE.MeshStandardMaterial({color:0x7c5a38,roughness:1}));trunk.position.y=2.75;g.add(trunk);for(let j=0;j<6;j++){const leaf=new THREE.Mesh(new THREE.BoxGeometry(.15,2.8,.28),new THREE.MeshStandardMaterial({color:0x1f6338,roughness:1}));leaf.position.set(Math.sin(j)*1.25,5.5,Math.cos(j)*1.25);leaf.rotation.z=Math.sin(j)*.45;leaf.rotation.x=Math.cos(j)*.25;g.add(leaf);}g.position.set(x,0,z);scene.add(g);return g;}
+for(let i=0;i<9;i++)makePalm(-305+i*23,24+(i%3)*3);
+const boat=new THREE.Mesh(new THREE.BoxGeometry(10,1.2,3.2),new THREE.MeshStandardMaterial({color:0xf2f2f2,roughness:.4}));boat.position.set(-245,1,75);scene.add(boat);
+const yacht=boat.clone();yacht.scale.set(1.8,1.8,1.6);yacht.position.set(-145,1.2,108);yacht.material=new THREE.MeshStandardMaterial({color:0x263a48,metalness:.4,roughness:.3});scene.add(yacht);
+
+for(let i=0;i<35;i++){
+  const t=new THREE.Mesh(new THREE.CylinderGeometry(.7,.9,6,8),new THREE.MeshStandardMaterial({color:0x315c39}));
+  const crown=new THREE.Mesh(new THREE.SphereGeometry(3.3,10,8),new THREE.MeshStandardMaterial({color:0x1d5130}));
+  const x=(Math.random()*2-1)*250,z=(Math.random()*2-1)*250;
+  if(Math.abs(x)<45||Math.abs(z)<45) continue;
+  t.position.set(x,3,z);crown.position.set(x,8,z);scene.add(t,crown);
+}
+
+function makePerson(skin=0x9c6a45,outfit=0x2c6e9e,hairColor=0x17120f){
+  const g=new THREE.Group();
+  const skinMat=new THREE.MeshStandardMaterial({color:skin,roughness:.82});
+  const clothMat=new THREE.MeshStandardMaterial({color:outfit,roughness:.86});
+  const darkMat=new THREE.MeshStandardMaterial({color:hairColor,roughness:.78});
+  const torso=new THREE.Mesh(new THREE.BoxGeometry(.82,1.05,.48),clothMat);torso.position.y=1.55;torso.castShadow=true;g.add(torso);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(.38,16,12),skinMat);head.position.y=2.45;head.castShadow=true;g.add(head);
+  const hair=new THREE.Mesh(new THREE.SphereGeometry(.4,16,8,0,Math.PI*2,0,Math.PI*.55),darkMat);hair.position.y=2.55;hair.castShadow=true;g.add(hair);
+  const faceMat=new THREE.MeshStandardMaterial({color:0x101820,roughness:.5});
+  for(const ex of [-.13,.13]){const eye=new THREE.Mesh(new THREE.SphereGeometry(.035,8,6),faceMat);eye.position.set(ex,2.48,-.355);g.add(eye);}
+  for(const ex of [-.13,.13]){const brow=new THREE.Mesh(new THREE.BoxGeometry(.09,.025,.025),faceMat);brow.position.set(ex,2.55,-.36);brow.rotation.z=ex<0?.08:-.08;g.add(brow);}
+  const mouth=new THREE.Mesh(new THREE.BoxGeometry(.16,.025,.025),faceMat);mouth.position.set(0,2.34,-.36);g.add(mouth);
+  const legMat=new THREE.MeshStandardMaterial({color:0x1c2530,roughness:.92}),legs=[],shoes=[],arms=[];
+  for(const x of [-.23,.23]){
+    const pivot=new THREE.Group();pivot.position.set(x,1.24,0);g.add(pivot);
+    const leg=new THREE.Mesh(new THREE.CylinderGeometry(.13,.13,1.04,12),legMat);leg.position.y=-.52;leg.castShadow=true;pivot.add(leg);legs.push(pivot);
+    const shoe=new THREE.Mesh(new THREE.BoxGeometry(.28,.12,.5),darkMat);shoe.position.set(0,-1.05,-.07);shoe.castShadow=true;pivot.add(shoe);shoes.push(shoe);
+  }
+  for(const x of [-.52,.52]){
+    const pivot=new THREE.Group();pivot.position.set(x,2.0,0);g.add(pivot);
+    const arm=new THREE.Mesh(new THREE.CylinderGeometry(.1,.1,.91,10),clothMat);arm.position.y=-.45;arm.castShadow=true;pivot.add(arm);arms.push(pivot);
+  }
+  g.userData.parts={torso,head,hair,legs,shoes,arms};g.userData.walkPhase=0;return g;
+}
+const player=makePerson(0x2c6e9e);scene.add(player);player.position.set(0,0,30);
+function addContactShadow(g){const m=new THREE.Mesh(new THREE.CircleGeometry(.62,16),new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:.18,depthWrite:false}));m.rotation.x=-Math.PI/2;m.position.y=.012;g.add(m);g.userData.contactShadow=m;}
+addContactShadow(player);
+function applyCharacter(){
+  if(!player) return;
+  const sm=new THREE.MeshStandardMaterial({color:state.skin,roughness:.85});
+  const om=new THREE.MeshStandardMaterial({color:state.outfit,roughness:.9});
+  const hm=new THREE.MeshStandardMaterial({color:state.hair,roughness:.8});
+  if(player.children[0]) player.children[0].material=om;
+  if(player.children[1]) player.children[1].material=sm;
+  if(player.children[2]) player.children[2].material=hm;
+  const parts=player.userData.parts; if(parts) parts.arms.forEach(a=>{if(a.children[0])a.children[0].material=om;});
+  player.scale.set(state.gender==='female'?0.96:1, state.gender==='female'?0.98:1, state.gender==='female'?0.96:1);
+}
+
+
+function animateHuman(g,moving,dt){if(!g||!g.userData?.parts)return;const p=g.userData.parts;g.userData.walkPhase=(g.userData.walkPhase||0)+(moving?dt*(g===player&&sprintHeld?14:9.5):0);const target=moving?Math.sin(g.userData.walkPhase)*.58:0;const armSwing=-target*.72;p.legs[0].rotation.x+=(target-p.legs[0].rotation.x)*.35;p.legs[1].rotation.x+=(-target-p.legs[1].rotation.x)*.35;p.arms[0].rotation.x+=(armSwing-p.arms[0].rotation.x)*.35;p.arms[1].rotation.x+=(-armSwing-p.arms[1].rotation.x)*.35;}
+
+const npcs=[];
+for(let i=0;i<18;i++){
+  const n=makePerson([0x9e553f,0x4b7d55,0x8b6b9a,0x9b7d43][i%4]);
+  n.position.set((Math.random()*2-1)*150,0,(Math.random()*2-1)*150);
+  n.userData={a:Math.random()*6.28,s:.2+Math.random()*.25};addContactShadow(n);
+  scene.add(n);npcs.push(n);
+}
+const partyNPCs=[];for(let i=0;i<10;i++){const p=makePerson([0x6f432f,0x9b6547,0xb87855,0x4b2b20][i%4],[0x7c3aed,0xdb2777,0x0891b2,0xf59e0b,0x16a34a][i%5],0x17120f);p.scale.setScalar(.9);p.position.set(-145+(i%5)*5,0,150+Math.floor(i/5)*4);p.userData={party:true,phase:Math.random()*6.28};scene.add(p);partyNPCs.push(p);}
+const partyLights=[];for(let i=0;i<4;i++){const l=new THREE.PointLight([0xff6bd6,0x65d8ff,0xb98cff,0x7dff9b][i],2,25);l.position.set(-145+(i%2)*8,7,150+Math.floor(i/2)*8);scene.add(l);partyLights.push(l);}
+function car(color,name,x,z){
+  const g=new THREE.Group();
+  const paint=new THREE.MeshStandardMaterial({color,metalness:.65,roughness:.28});
+  const dark=new THREE.MeshStandardMaterial({color:0x111820,metalness:.25,roughness:.22});
+  const glass=new THREE.MeshStandardMaterial({color:0x162c39,metalness:.35,roughness:.12,transparent:true,opacity:.92});
+  const chrome=new THREE.MeshStandardMaterial({color:0xb9c2c7,metalness:.9,roughness:.16});
+  const light=new THREE.MeshStandardMaterial({color:0xf7f2cf,emissive:0xffe7a0,emissiveIntensity:.65});
+  const redLight=new THREE.MeshStandardMaterial({color:0x8f161b,emissive:0x4a080b,emissiveIntensity:.45});
+
+  const lower=new THREE.Mesh(new THREE.BoxGeometry(4.55,.92,7.65),paint);
+  lower.position.y=1.02;lower.castShadow=true;g.add(lower);
+
+  const hood=new THREE.Mesh(new THREE.BoxGeometry(4.25,.24,1.75),paint);
+  hood.position.set(0,1.57,-2.72);hood.castShadow=true;g.add(hood);
+
+  const cabin=new THREE.Mesh(new THREE.BoxGeometry(3.35,1.18,3.65),paint);
+  cabin.position.set(0,2.02,.35);cabin.castShadow=true;g.add(cabin);
+
+  const frontGlass=new THREE.Mesh(new THREE.BoxGeometry(3.0,.78,.07),glass);
+  frontGlass.position.set(0,2.17,-1.47);frontGlass.rotation.x=-.13;g.add(frontGlass);
+  const rearGlass=frontGlass.clone();rearGlass.position.z=2.12;rearGlass.rotation.x=.13;g.add(rearGlass);
+
+  for(const sx of [-1.69,1.69]){
+    const sideGlass=new THREE.Mesh(new THREE.BoxGeometry(.06,.78,2.65),glass);
+    sideGlass.position.set(sx,2.16,.35);g.add(sideGlass);
+  }
+
+  const frontBumper=new THREE.Mesh(new THREE.BoxGeometry(4.35,.26,.18),dark);
+  frontBumper.position.set(0,.82,-3.88);g.add(frontBumper);
+  const rearBumper=frontBumper.clone();rearBumper.position.z=3.88;g.add(rearBumper);
+
+  const grille=new THREE.Mesh(new THREE.BoxGeometry(1.55,.34,.12),chrome);
+  grille.position.set(0,1.12,-3.91);g.add(grille);
+
+  const headL=new THREE.Mesh(new THREE.BoxGeometry(.78,.22,.09),light);
+  headL.position.set(-1.35,1.34,-3.9);g.add(headL);
+  const headR=headL.clone();headR.position.x=1.35;g.add(headR);
+  const hl1=new THREE.PointLight(0xffedb0,0,34,2);hl1.position.set(-1.35,1.35,-4.15);g.add(hl1);
+  const hl2=new THREE.PointLight(0xffedb0,0,34,2);hl2.position.set(1.35,1.35,-4.15);g.add(hl2);
+  g.userData.headlightPoints=[hl1,hl2];
+
+  const tailL=new THREE.Mesh(new THREE.BoxGeometry(.82,.2,.09),redLight);
+  tailL.position.set(-1.35,1.3,3.9);g.add(tailL);
+  const tailR=tailL.clone();tailR.position.x=1.35;g.add(tailR);
+
+  for(const sx of [-2.34,2.34]) for(const sz of [-2.55,2.55]){
+    const tire=new THREE.Mesh(new THREE.CylinderGeometry(.74,.74,.46,20),dark);
+    tire.rotation.z=Math.PI/2;tire.position.set(sx,.7,sz);tire.castShadow=true;g.add(tire);
+    const rim=new THREE.Mesh(new THREE.CylinderGeometry(.34,.34,.49,16),chrome);
+    rim.rotation.z=Math.PI/2;rim.position.set(sx,.7,sz);g.add(rim);
+  }
+
+  for(const sx of [-2.28,2.28]){
+    const mirror=new THREE.Mesh(new THREE.BoxGeometry(.22,.18,.48),dark);
+    mirror.position.set(sx,1.72,-1.12);g.add(mirror);
+  }
+
+  for(const sx of [-1.48,1.48]){
+    for(const sz of [-.75,1.25]){
+      const handle=new THREE.Mesh(new THREE.BoxGeometry(.08,.05,.34),chrome);
+      handle.position.set(sx,1.55,sz);g.add(handle);
+    }
+  }
+
+  const doorPivots=[];
+  for(const sx of [-1,1]) for(const sz of [-.78,1.25]){
+    const pivot=new THREE.Group(); pivot.position.set(sx*1.73,1.55,sz);
+    const door=new THREE.Mesh(new THREE.BoxGeometry(.09,1.08,1.25),paint); door.position.x=sx*.06; door.castShadow=true;
+    pivot.add(door); g.add(pivot); doorPivots.push({pivot,side:sx,open:0});
+  }
+  g.userData.doors=doorPivots;
+
+  if(name.includes("GT")){
+    const spoiler=new THREE.Mesh(new THREE.BoxGeometry(3.2,.16,.45),dark);
+    spoiler.position.set(0,2.02,3.68);g.add(spoiler);
+    for(const sx of [-1.25,1.25]){
+      const post=new THREE.Mesh(new THREE.BoxGeometry(.12,.55,.12),dark);
+      post.position.set(sx,1.78,3.55);g.add(post);
+    }
+  }
+
+  if(name.includes("Executive")){
+    const trim=new THREE.Mesh(new THREE.BoxGeometry(3.3,.08,.12),chrome);
+    trim.position.set(0,1.45,-3.93);g.add(trim);
+  }
+
+  g.position.set(x,0,z);
+  g.userData.name=name;g.userData.owned=state.owned.includes(name);
+  g.userData.speed=name.includes("GT")?28:name.includes("Executive")?23:20;
+  g.userData.spawned=true;
+  scene.add(g);return g;
+}
+const cars=[car(0x2c7c98,"NOVA City",18,24),car(0x9b3636,"NOVA GT",-35,30),car(0xb6b7b8,"NOVA Executive",42,-18)];
+const trafficCars=[
+  car(0x101010,"LUXURY SEDAN",-18,-48), car(0x6d6d6d,"NOVA Hyper Traffic",65,48), car(0x20252b,"ULTRA SUV",-72,112),
+  car(0xffffff,"NOVA Executive Traffic",125,18), car(0x283b55,"SPORT COUPE",-120,70)
+];
+trafficCars.forEach(c=>{c.userData.owned=false;c.userData.traffic=true;c.userData.speed=10+Math.random()*7;});
+function spawnOwnedCar(name){
+  const existing=cars.find(c=>c.userData.name===name); if(existing){existing.userData.owned=true;existing.visible=true;existing.position.set(player.position.x+6,0,player.position.z+4);state.selectedCar=existing;return existing;}
+  const c=car(name.includes('GT')?0x9b3636:name.includes('Executive')?0xb6b7b8:0x2c7c98,name,player.position.x+6,player.position.z+4);cars.push(c);state.selectedCar=c;toast(name+' is now parked outside your home 🚗');return c;
+}
+
+let bicycle=null;
+function makeBicycle(x=0,z=0){
+  const g=new THREE.Group();
+  const mat=new THREE.MeshStandardMaterial({color:0x111820,metalness:.55,roughness:.3});
+  const wheelMat=new THREE.MeshStandardMaterial({color:0x15191d,roughness:.9});
+  for(const wx of [-1.05,1.05]){const w=new THREE.Mesh(new THREE.TorusGeometry(.58,.08,10,24),wheelMat);w.rotation.y=Math.PI/2;w.position.set(wx,.62,0);g.add(w);}
+  const frame=new THREE.Mesh(new THREE.BoxGeometry(2.1,.08,.08),mat);frame.position.y=.95;g.add(frame);
+  const stem=new THREE.Mesh(new THREE.BoxGeometry(.08,.85,.08),mat);stem.position.set(.72,1.2,0);stem.rotation.z=-.18;g.add(stem);
+  const seat=new THREE.Mesh(new THREE.BoxGeometry(.35,.08,.18),mat);seat.position.set(-.48,1.32,0);g.add(seat);
+  g.position.set(x,0,z);g.userData={name:'NOVA Bicycle',traffic:false};scene.add(g);return g;
+}
+bicycle=makeBicycle(8,38);
+function rideBike(){
+  if(state.inCar)return toast('Exit your car first.');
+  state.inBike=!state.inBike;
+  if(state.inBike){state.inCar=false;toast('You are riding the bicycle 🚲');}
+  else toast('You parked the bicycle.');
+}
+
+const streetLights=[];
+function makeStreetLight(x,z){const g=new THREE.Group();const pole=new THREE.Mesh(new THREE.CylinderGeometry(.08,.12,5.8,8),new THREE.MeshStandardMaterial({color:0x252b31,metalness:.55,roughness:.5}));pole.position.y=2.9;g.add(pole);const arm=new THREE.Mesh(new THREE.BoxGeometry(1.2,.08,.08),new THREE.MeshStandardMaterial({color:0x252b31,metalness:.55}));arm.position.set(.5,5.55,0);g.add(arm);const bulb=new THREE.Mesh(new THREE.SphereGeometry(.13,8,6),new THREE.MeshStandardMaterial({color:0xfff0b0,emissive:0xffd36b,emissiveIntensity:.2}));bulb.position.set(1.02,5.45,0);g.add(bulb);const light=new THREE.PointLight(0xffd88a,0,22,2);light.position.set(1.02,5.3,0);g.add(light);g.userData={light,bulb};g.position.set(x,0,z);scene.add(g);streetLights.push(g);}
+for(let x=-270;x<=270;x+=45){makeStreetLight(x,12);makeStreetLight(x,-12);}for(let z=-270;z<=270;z+=45){makeStreetLight(12,z);makeStreetLight(-12,z);}
+function updateStreetLights(){const h=new Date().getHours();const night=h<6||h>=18;streetLights.forEach(g=>{g.userData.light.intensity=night?1.8:0;g.userData.bulb.material.emissiveIntensity=night?2.8:.2;});}
+
+const cityDecor=new THREE.Group();scene.add(cityDecor);
+const purpleLeaves=[];for(let i=0;i<(isMobileDevice?60:140);i++){const leaf=new THREE.Mesh(new THREE.SphereGeometry(.09,5,5),new THREE.MeshStandardMaterial({color:[0xa855f7,0xc084fc,0x7c3aed,0xe879f9][i%4],emissive:0x21083a,emissiveIntensity:.12}));leaf.position.set((Math.random()*2-1)*230,.12+Math.random()*.3,(Math.random()*2-1)*230);leaf.userData={vx:(Math.random()-.5)*.6,vz:(Math.random()-.5)*.6,phase:Math.random()*6.28};cityDecor.add(leaf);purpleLeaves.push(leaf);}
+const snowParticles=[];for(let i=0;i<(isMobileDevice?40:100);i++){const sn=new THREE.Mesh(new THREE.SphereGeometry(.08,5,5),new THREE.MeshBasicMaterial({color:0xffffff}));sn.position.set((Math.random()*2-1)*250,Math.random()*35,(Math.random()*2-1)*250);cityDecor.add(sn);snowParticles.push(sn);}
+function updateCityDecor(){const tok=state.location==='Tokyo';const snow=['Toronto','London'].includes(state.location);purpleLeaves.forEach(l=>l.visible=tok);snowParticles.forEach(l=>l.visible=snow);}
+
+const landmarks=[];
+function sign(text,x,z){
+ const c=document.createElement("canvas");c.width=512;c.height=128;const ctx=c.getContext("2d");
+ ctx.fillStyle="#09131d";ctx.fillRect(0,0,512,128);ctx.fillStyle="#fff";ctx.font="bold 48px sans-serif";ctx.textAlign="center";ctx.fillText(text,256,80);
+ const tex=new THREE.CanvasTexture(c);const s=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true}));s.scale.set(12,3,1);s.position.set(x,10,z);scene.add(s);landmarks.push(s)
+}
+sign("NOVA MALL",-85,25);sign("NOVA STADIUM",75,145);sign("NOVA AIRPORT",-200,-220);sign("YOUR HOME",35,70);
+
+const home=box(24,10,20,0x8d735c,35,0,70,false);
+
+/* NOVA CITY SKYLINE + PERSONAL STREET GRID */
+const buildingDefs=[];
+function skyscraper(name,x,z,w,d,h,color){
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),new THREE.MeshStandardMaterial({color,metalness:.28,roughness:.48}));
+  body.position.y=h/2;body.castShadow=true;body.receiveShadow=true;g.add(body);
+  const glassMat=new THREE.MeshStandardMaterial({color:0x315b72,metalness:.35,roughness:.18});
+  const bandMat=new THREE.MeshStandardMaterial({color:0xb8c4cb,metalness:.65,roughness:.2});
+  for(const side of [-1,1]){
+    const glass=new THREE.Mesh(new THREE.BoxGeometry(w*.72,.9,.08),glassMat);
+    glass.position.set(0,h*.72,side*(d/2+.05));g.add(glass);
+    const band=new THREE.Mesh(new THREE.BoxGeometry(w*.86,.16,.12),bandMat);
+    band.position.set(0,h*.28,side*(d/2+.07));g.add(band);
+  }
+  for(let yy=12;yy<h-8;yy+=12){
+    const ring=new THREE.Mesh(new THREE.BoxGeometry(w+.16,.08,d+.16),bandMat);
+    ring.position.y=yy;g.add(ring);
+  }
+  const roof=new THREE.Mesh(new THREE.BoxGeometry(w*.55,1.2,d*.55),darkSky);
+  roof.position.y=h+.6;g.add(roof);
+  g.position.set(x,0,z);g.userData={name,kind:"tower",enterable:true};
+  scene.add(g);buildingDefs.push(g);return g;
+}
+const darkSky=new THREE.MeshStandardMaterial({color:0x182631,metalness:.4,roughness:.3});
+skyscraper("NOVA World Tower",190,105,48,48,145,0x344b5e);
+skyscraper("Bright Heights",220,-55,42,42,112,0x536777);
+skyscraper("Chidera Financial Centre",150,-105,52,44,92,0x465c68);
+skyscraper("Sachi Gardens Tower",-170,-35,44,44,78,0x50675e);
+skyscraper("Pupu Residences",-165,175,50,42,64,0x675b55);
+
+sign("BRIGHT AVENUE",15,8);
+sign("CHIDERA BOULEVARD",105,72);
+sign("SACHI GARDENS",-155,-5);
+sign("PUPU CRESCENT",-150,185);
+sign("D H E R A  STREET",-65,-95);
+sign("NWAOKORU DRIVE",185,-5);
+sign("NOVA WAY",-10,205);
+sign("UNITY BOULEVARD",205,185);
+
+
+const stadium=box(55,7,38,0x4b4f5a,75,0,145,false);
+
+const football=new THREE.Mesh(new THREE.SphereGeometry(.32,16,12),new THREE.MeshStandardMaterial({color:0xffffff,roughness:.55}));
+football.position.set(75,.38,145);scene.add(football);
+let ballVel=new THREE.Vector3();
+function kickFootball(){
+  if(player.position.distanceTo(football.position)>7)return toast('Get closer to the ball ⚽');
+  const dir=new THREE.Vector3().subVectors(football.position,player.position).setY(0).normalize();
+  ballVel.copy(dir).multiplyScalar(13); ballVel.y=4; toast('Shot! ⚽');
+}
+
+const pitch=new THREE.Mesh(new THREE.BoxGeometry(42,.12,24),new THREE.MeshStandardMaterial({color:0x1e743f}));
+pitch.position.set(75,.08,145);scene.add(pitch);
+// Full football ground: markings, goals, stands, benches and active training NPCs.
+function pitchLine(w,d,x,z){const m=new THREE.Mesh(new THREE.BoxGeometry(w,.035,d),new THREE.MeshStandardMaterial({color:0xf5f5e8}));m.position.set(x,.16,z);scene.add(m);return m;}
+pitchLine(42,.16,75,133);pitchLine(42,.16,75,157);pitchLine(.16,24,54,145);pitchLine(.16,24,96,145);
+const centerRing=new THREE.Mesh(new THREE.RingGeometry(5.2,5.35,48),new THREE.MeshBasicMaterial({color:0xf5f5e8,side:THREE.DoubleSide}));centerRing.rotation.x=-Math.PI/2;centerRing.position.set(75,.17,145);scene.add(centerRing);
+for(const gx of [53.6,96.4]){const net=new THREE.Mesh(new THREE.BoxGeometry(.25,3.1,7.4),new THREE.MeshStandardMaterial({color:0xffffff,wireframe:true,transparent:true,opacity:.72}));net.position.set(gx,1.6,145);scene.add(net);}
+for(const side of [-1,1]){const stand=box(50,8,13,0x343d47,75,0,145+side*27,false);for(let r=0;r<4;r++){const bench=box(44,.45,2.1,0x6b7279,75,.8+r*1.55,145+side*(31+r*2),false);}}
+const scoreboard=box(10,5,.8,0x151c24,75,9,127,false);sign('NOVA STADIUM · TRAINING · MATCHDAY',75,124);
+const footballers=[];for(let i=0;i<8;i++){const f=makePerson([0x7a4d34,0x9b6547,0x5d392a,0xb87855][i%4],[0x0f766e,0x1d4ed8,0xb91c1c,0xf59e0b][i%4],0x17120f);f.scale.setScalar(.92);f.position.set(58+(i%4)*11,0,139+Math.floor(i/4)*11);f.userData={footballer:true,a:Math.random()*6.28};scene.add(f);footballers.push(f);}
+
+const mall=box(45,16,35,0x765a4b,-85,0,25,false);
+const airport=box(70,14,45,0x59636e,-200,0,-220,false);
+function activeBuilding(name,x,z,w,d,h,color,kind){
+ const b=box(w,h,d,color,x,0,z,kind!=='home'); b.userData={name,kind,enterable:true}; buildingDefs.push(b); return b;
+}
+activeBuilding('NOVA Market',-35,85,30,24,13,0x6f5c45,'market');
+activeBuilding('NOVA Café',-125,65,26,22,11,0x6d4b4b,'restaurant');
+activeBuilding('NOVA Night Lounge',-145,150,34,25,12,0x463d67,'club');
+activeBuilding('NOVA Car House',-5,130,34,24,12,0x3d5865,'dealership');
+activeBuilding('Your Apartment',35,70,24,20,10,0x8d735c,'home');
+activeBuilding('NOVA Bank Tower',120,115,30,30,26,0x3e5968,'bank');
+activeBuilding('NOVA Immigration Office',145,55,28,24,15,0x665f50,'immigration');
+activeBuilding('NOVA Land Office',105,15,28,22,12,0x566a55,'land');
+activeBuilding('NOVA General Hospital',-120,-55,40,30,18,0x58717a,'hospital');
+activeBuilding('NOVA Police HQ',-55,175,32,26,15,0x4b596c,'police');
+activeBuilding('NOVA High Court',115,185,38,30,18,0x6d6254,'court');
+activeBuilding('NOVA Government House',190,105,42,34,17,0x59645a,'government');
+activeBuilding('NOVA Supermarket',-135,-120,36,28,12,0x5f6a52,'market');
+activeBuilding('NOVA Hotel',205,-105,34,28,20,0x5c526c,'hotel');
+// NOVA ESTATES — large enterable residential district with subtle personal Easter eggs.
+activeBuilding('Letisha Heights Estate',-55,-40,42,34,12,0x6b5870,'home');
+activeBuilding('Naeomi Gardens Estate',10,-62,46,36,13,0x526b5d,'home');
+activeBuilding('Chigo Palace Estate',78,-48,52,40,15,0x69523e,'home');
+activeBuilding('Babz Grand Estate',145,-38,50,38,16,0x3f5565,'home');
+activeBuilding('Edith N. Residence',-115,-35,40,32,12,0x755e50,'home');
+activeBuilding('Daya Gardens',-175,-18,38,30,11,0x4e6657,'home');
+activeBuilding('Belemzy Heights',-115,-92,44,34,13,0x5f506c,'home');
+activeBuilding('Lensi Gardens',35,-118,48,38,14,0x4b6170,'home');
+activeBuilding('ELY Court',100,-108,38,30,12,0x6d5d4b,'home');
+activeBuilding('Zorom Residence',162,-105,40,32,12,0x465c62,'home');
+activeBuilding('Mon Belle Amour Estate',-200,30,46,36,13,0x624e68,'home');
+activeBuilding('Godfather Palace',-195,92,58,44,18,0x6d5a3b,'home');
+activeBuilding('Nwaokoru Dynasty',190,65,60,46,19,0x3e5265,'home');
+activeBuilding('Gamma House',190,5,38,30,12,0x5f654d,'home');
+activeBuilding('Hazelnut Court',155,155,42,32,12,0x72584b,'home');
+activeBuilding('Ameerah Heights',10,155,46,34,14,0x4f5f74,'home');
+activeBuilding('Righttime Residence',-55,158,40,32,12,0x556d58,'home');
+activeBuilding('Verdan Villas',-120,145,44,34,13,0x596271,'home');
+activeBuilding('Cedar Park Homes',-185,145,42,32,12,0x586b55,'home');
+activeBuilding('Kammy Court',125,175,40,32,12,0x66506a,'home');
+activeBuilding('Kamillia Heights',55,188,46,34,14,0x526477,'home');
+activeBuilding('Kaga Villas',-5,205,42,32,12,0x6a5949,'home');
+activeBuilding('Tudah Gardens',-75,215,46,34,13,0x4e6a61,'home');
+activeBuilding('Anabel Gardens',-145,205,44,34,13,0x68566c,'home');
+activeBuilding('Elyon Estate',145,225,52,40,15,0x465d70,'home');
+activeBuilding('Roselyn Court',65,235,42,32,12,0x6d5c55,'home');
+activeBuilding('Onyinye House',-10,248,40,30,11,0x4c655c,'home');
+activeBuilding('Young P Residences',-80,265,48,36,13,0x5b5870,'home');
+activeBuilding('Mercy District Villas',-160,255,52,38,14,0x59645a,'home');
+activeBuilding('Neptune House',-235,235,44,34,13,0x4f6070,'home');
+activeBuilding('Rido Estate',220,145,48,36,13,0x5d604e,'home');
+activeBuilding('Divine Gardens',235,220,46,34,13,0x62516a,'home');
+activeBuilding('Nessera Villas',-235,155,44,34,12,0x586c67,'home');
+activeBuilding('Tayomi Heights',235,95,44,34,13,0x4d5e72,'home');
+activeBuilding('Davies Court',-230,-55,42,32,12,0x6b5b4e,'home');
+
+// Shorter references become streets/stores rather than obvious full names.
+const easterEggSigns=[
+  ['LENSI GARDENS',35,-145],['ELY COURT',100,-135],['ZOROM DRIVE',162,-132],
+  ['KOKO NNE MARKET',-215,15],['TONYE-ONYE WAY',220,35],['GLADYS WALK',-210,115],
+  ['KIIMORA LANE',-10,285],['TAF.FY STREET',80,285],['PETER PLAZA',160,285],
+  ['WISDOM BOULEVARD',235,-10],['CEDAR WAY',-15,275],['EKEH ROAD',-105,285],
+  ['LUKA LANE',-190,285],['BRIGHTTHESEER AVE',-265,90],['PEJ JUNIOR ROAD',-270,20],
+  ['DIVINE FAVOUR STREET',270,165],['FONXZY MARKET',270,235],['ALEXA WALK',-270,165],
+  ['DRIZZY SG EMPIRE',-275,-15],['RHÔNE ROAD',270,60],['TIAN TIAN SQUARE',-270,-105]
+];
+easterEggSigns.forEach(([n,x,z])=>sign(n,x,z));
+
+
+
+const planeBody=new THREE.Mesh(new THREE.BoxGeometry(12,2,38),new THREE.MeshStandardMaterial({color:0xe8e8e8,metalness:.1,roughness:.4}));planeBody.position.set(-200,3,-255);scene.add(planeBody);const wing=new THREE.Mesh(new THREE.BoxGeometry(30,.5,5),new THREE.MeshStandardMaterial({color:0xcbd2d8}));wing.position.set(-200,3,-255);scene.add(wing);const runway=new THREE.Mesh(new THREE.BoxGeometry(30,.05,180),new THREE.MeshStandardMaterial({color:0x2b3035}));
+const heliPad=new THREE.Mesh(new THREE.CylinderGeometry(13,.2,1,32),new THREE.MeshStandardMaterial({color:0x46515a}));
+heliPad.position.set(-150,.15,-180);scene.add(heliPad);
+const heliBody=new THREE.Mesh(new THREE.SphereGeometry(4,16,10),new THREE.MeshStandardMaterial({color:0x374b57,metalness:.25}));
+heliBody.scale.set(1,0.65,1.5);heliBody.position.set(-150,4,-180);scene.add(heliBody);
+const heliRotor=new THREE.Mesh(new THREE.BoxGeometry(18,.15,.5),new THREE.MeshStandardMaterial({color:0x20262a}));
+heliRotor.position.set(-150,7,-180);scene.add(heliRotor);
+
+runway.position.set(-200,.04,-305);scene.add(runway);
+
+let yaw=0,pitchCam=.12,dist=9;
+const target=new THREE.Vector3();
+let dragging=false,lastX=0,lastY=0;
+function updateCamera(){
+  target.copy(player.position);target.y=1.6;
+  const off=new THREE.Vector3(Math.sin(yaw)*dist,2.6+pitchCam*4,Math.cos(yaw)*dist);
+  camera.position.copy(target).add(off);camera.lookAt(target);
+}
+updateCamera();
+
+const keys={};
+addEventListener("keydown",e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==="e") interact();if(e.key.toLowerCase()==="p") togglePhone();if(e.key.toLowerCase()==="h") horn();if(e.key.toLowerCase()==="l") toggleHeadlights();if(e.code==="Space"){e.preventDefault();requestJump();}});
+addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+renderer.domElement.addEventListener("pointerdown",e=>{dragging=true;lastX=e.clientX;lastY=e.clientY});
+addEventListener("pointerup",()=>dragging=false);
+addEventListener("pointermove",e=>{if(!dragging)return;const dx=e.clientX-lastX,dy=e.clientY-lastY;lastX=e.clientX;lastY=e.clientY;yaw-=dx*.006;pitchCam=Math.max(-1.15,Math.min(1.05,pitchCam+dy*.004));});
+renderer.domElement.addEventListener("wheel",e=>{dist=Math.max(4,Math.min(22,dist+e.deltaY*.012));});
+
+const touchState={};
+document.querySelectorAll("#controls button[data-move]").forEach(b=>{
+  const k=b.dataset.move;
+  b.addEventListener("pointerdown",e=>{e.preventDefault();touchState[k]=true});
+  b.addEventListener("pointerup",()=>touchState[k]=false);
+  b.addEventListener("pointerleave",()=>touchState[k]=false);
+});
+
+let sprintHeld=false;
+function requestJump(){if(state.inCar||state.inBike)return;if(state.onGround){state.velocityY=7.2;state.onGround=false;state.jumpQueued=false;ensureAudio();soundJump();toast('Jump!');}}
+function horn(){if(!state.inCar)return toast('Enter a car to use the horn 🚗');try{const ac=window.__novaHorn||(window.__novaHorn=new (window.AudioContext||window.webkitAudioContext)());const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=220;g.gain.setValueAtTime(.0001,ac.currentTime);g.gain.exponentialRampToValueAtTime(.055,ac.currentTime+.01);g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+.22);o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+.23);}catch(e){}toast('Honk 📣');}
+function toggleHeadlights(){state.headlights=!state.headlights;updateVehicleLights(true);toast(state.headlights?'Headlights ON 💡':'Headlights OFF');}
+function updateVehicleLights(force=false){const h=new Date().getHours();const night=h<6||h>=19;for(const c of [...cars,...trafficCars]){if(!c.userData.headlightPoints)continue;const on=state.headlights && night;if(c.userData.headlightPoints) c.userData.headlightPoints.forEach(l=>l.intensity=on?3.2:0);}}
+function movePlayer(dt){
+ const sprint=!!(keys.shift||sprintHeld);state.sprint=sprint;
+ if(state.inCar&&state.car){const f=(keys.w||keys.arrowup||touchState.up?1:0)-(keys.s||keys.arrowdown||touchState.down?1:0)-state.joystick.y;const turn=(keys.a||keys.arrowleft||touchState.left?1:0)-(keys.d||keys.arrowright||touchState.right?1:0)+state.joystick.x;state.car.rotation.y+=turn*dt*1.8;state.car.translateZ(-f*dt*(state.car.userData.speed||22));player.position.copy(state.car.position);player.position.y=0;if(f||turn)state.energy=Math.max(0,state.energy-dt*.8);return;}
+ const f=(keys.w||keys.arrowup||touchState.up?1:0)-(keys.s||keys.arrowdown||touchState.down?1:0)-state.joystick.y;const r=(keys.d||keys.arrowright||touchState.right?1:0)-(keys.a||keys.arrowleft||touchState.left?1:0)+state.joystick.x;const dir=new THREE.Vector3(r,0,-f);const mag=Math.min(1,dir.length());
+ if(mag){dir.normalize();dir.applyAxisAngle(new THREE.Vector3(0,1,0),yaw);const speed=sprint?10.5:5.2;player.position.addScaledVector(dir,dt*speed);player.rotation.y=Math.atan2(dir.x,-dir.z);state.energy=Math.max(0,state.energy-dt*(sprint?.24:.07));animateHuman(player,true,dt);}else animateHuman(player,false,dt);
+ state.velocityY-=18*dt;player.position.y+=state.velocityY*dt;if(player.position.y<=0){player.position.y=0;state.velocityY=0;state.onGround=true;}player.position.x=Math.max(-290,Math.min(290,player.position.x));player.position.z=Math.max(-290,Math.min(290,player.position.z));
+}
+
+function nearest(){
+ let best=null,bd=999; for(const c of cars){if(!c.visible)continue;const d=player.position.distanceTo(c.position);if(d<bd){bd=d;best={type:'car',obj:c,d}}}
+ for(const b of buildingDefs){const d=player.position.distanceTo(b.position);if(d<bd){bd=d;best={type:'building',obj:b,d}}}
+ const special=[{type:'home',obj:home,d:player.position.distanceTo(home.position)},{type:'mall',obj:mall,d:player.position.distanceTo(mall.position)},{type:'airport',obj:airport,d:player.position.distanceTo(airport.position)},{type:'stadium',obj:stadium,d:player.position.distanceTo(stadium.position)}];
+ for(const q of special){if(q.d<bd)best=q;} return best;
+}
+function interact(){
+ if(state.inCar){exitCar();return}
+ const n=nearest(); if(!n||n.d>10){toast('Move closer to a car, door, or building.');return}
+ if(n.type==='car'){if(!n.obj.userData.owned){toast('This car is not yours. Buy it in NOVA Cars.');return} enterCar(n.obj);return}
+ if(n.type==='building'){openBuilding(n.obj.userData);return}
+ if(n.type==='home'){openBuilding({name:'Your Apartment',kind:'home'});return}
+ if(n.type==='airport'){openPhone('map');toast('Airport terminal reached ✈️ Choose a destination.');return}
+ if(n.type==='stadium'){state.cash+=1000;toast('Training session complete · +✦1,000 ⚽');return}
+ if(n.type==='mall'){state.cash=Math.max(0,state.cash-800);toast('Meal purchased · −✦800');return}
+}
+function openBuilding(info){
+ const data={home:[['Living room','Rest, save your day and manage your lifestyle.'],['Bedroom','Recover energy and continue your story.'],['Wardrobe','Change outfits and personalize your character.'],['Kitchen','Prepare food and manage household life.'],['Garage','Park vehicles and manage your collection.'],['Garden / Balcony','Relax and view the neighborhood.']],market:[['Food aisle','Buy groceries and snacks.'],['Checkout','Spend NOVA cash.'],['Deliveries','Future home-delivery jobs.']],restaurant:[['Dining area','Order food and meet NPCs.'],['Kitchen','Food and hospitality careers.'],['Private booth','Social events.']],club:[['Main floor','Music, lights and social life.'],['VIP lounge','Premium lifestyle space.'],['Rooftop','City view and events.']],dealership:[['Showroom','Browse NOVA vehicles.'],['Service bay','Repair and customize.'],['Delivery desk','Collect purchased cars.']],tower:[['Sky lobby','View the NOVA skyline.'],['Observation deck','See the city from above.'],['Executive floors','Future offices and careers.']]}[info.kind]||[['Interior','Explore this location.'],['Activity','Interact with the world.'],['Exit','Return outside.']];
+ document.getElementById('interiorTitle').textContent=info.name;document.getElementById('interiorSub').textContent='This building is now an active space in NOVA WORLD.';document.getElementById('interiorGrid').innerHTML=data.map((x,i)=>`<div class="room"><b>${x[0]}</b><span>${x[1]}</span><button class="ghost" style="margin-top:10px;width:100%" onclick="buildingAction('${info.kind}',${i})">Interact</button></div>`).join('');document.getElementById('interior').style.display='block';}
+window.buildingAction=(kind,i)=>{if(kind==='home'){state.energy=Math.min(100,state.energy+35);toast('Welcome home · energy restored. Explore the rooms to live your NOVA life.')}else if(kind==='market'){if(state.cash>=500){state.cash-=500;toast('Groceries bought · −✦500')}else toast('Not enough NOVA cash.')}else if(kind==='restaurant'){if(state.cash>=800){state.cash-=800;toast('Meal enjoyed · −✦800')}else toast('Not enough NOVA cash.')}else if(kind==='dealership'){openPhone('cars');toast('Vehicle showroom opened.')}else if(kind==='club'){if(state.age<18){toast('This location is 18+ · access restricted.');}else{state.cash+=250;toast('You entered the social lounge and gained +✦250')}}else if(kind==='bank'){state.cash+=1200;toast('Bank shift complete · +✦1,200')}else if(kind==='immigration'){visitImmigration()}else if(kind==='land'){openLand()}else toast('Interaction complete.');renderPhone()};
+document.getElementById('closeInterior').onclick=()=>document.getElementById('interior').style.display='none';
+function enterCar(c){state.inCar=true;state.car=c;player.visible=false;toast("Entered "+c.userData.name+" · E to exit")}
+function exitCar(){player.visible=true;player.position.copy(state.car.position).add(new THREE.Vector3(5,0,0));state.inCar=false;state.car=null;toast("Exited vehicle")}
+function toast(t){const el=document.getElementById("toast");el.textContent=t;el.style.display="block";clearTimeout(window.__toast);window.__toast=setTimeout(()=>el.style.display="none",1800)}
+
+function renderPhone(){
+  document.getElementById("messages").innerHTML=
+   `<div class="onlineCard"><b>💬 NOVA LIVE CHAT</b><div class="tiny">Online-ready player messaging. Choose a username below.</div>
+    <input id="msgUser" class="appInput" placeholder="@username">
+    <input id="msgText" class="appInput" placeholder="Write a message">
+    <div class="actions" style="margin-top:7px"><button onclick="sendLiveMessage()">SEND</button><button class="ghost" onclick="refreshOnlineUsers()">ONLINE</button></div><div class="voiceBar"><button class="ghost" onclick="recordVoice()">🎙️ VOICE NOTE</button></div></div>`+
+   `<div class="tiny">Contacts: ${state.contacts.join(", ")}</div>`+
+   state.messages.slice(-8).map(m=>`<div class="msg"><div class="from">${m.from}</div><div class="bubble">${m.text}</div></div>`).join("");
+
+  document.getElementById("bank").innerHTML=
+   `<div class="row"><b>NOVA Bank</b><b>✦${state.cash.toLocaleString()} NOVA CASH</b></div>
+    <div class="onlineCard"><b>Send money to a player</b>
+      <input id="moneyUser" class="appInput" placeholder="@username">
+      <input id="moneyAmt" class="appInput" type="number" min="1" placeholder="Amount">
+      <button style="margin-top:7px;width:100%" onclick="sendPlayerMoney()">SEND MONEY</button>
+    </div>`;
+
+  document.getElementById("life").innerHTML=
+   `<div class="row"><span>Home</span><b>${state.homes[0]}</b></div>
+    <div class="row"><span>Cars</span><b>${state.owned.join(", ")}</b></div>
+    <div class="row"><span>Energy</span><b>${Math.round(state.energy)}%</b></div>
+    <div class="row"><span>Age</span><b>${state.age} ${state.age<18?'<span class="badge">Youth</span>':'<span class="badge">18+</span>'}</b></div>
+    <div class="actions"><button onclick="work()">Work +✦8,000</button><button onclick="startCareer('football')">⚽ Football</button><button onclick="startCareer('creator')">🎥 Creator</button><button onclick="startCareer('bank')">🏦 Bank job</button><button onclick="startCareer('business')">🏢 Business</button><button onclick="rideBike()">🚲 Bicycle</button><button onclick="openLand()">🏗️ Land & Homes</button><button onclick="rest()">Rest</button></div>`;
+
+  document.getElementById("map").innerHTML=`
+    <div class="row"><span>Current location</span><b>📍 ${state.location}, ${state.country}</b></div>
+    <div class="mapWrap"><div class="mapTools"><button onclick="mapZoom(1)">+</button><button onclick="mapZoom(-1)">−</button></div><div id="worldMapSvg"><div class="tiny" style="padding:20px">Loading world map…</div></div></div>
+    <div class="travelCard"><span>🇳🇬 Lagos, Nigeria<small> · current region</small></span><button onclick="travel('Lagos','Nigeria')">GO</button></div><div class="travelCard"><span>🇳🇬 Abuja, Nigeria</span><button onclick="travel('Abuja','Nigeria')">FLY</button></div><div class="travelCard"><span>🇳🇬 Port Harcourt, Nigeria</span><button onclick="travel('Port Harcourt','Nigeria')">FLY</button></div><div class="travelCard"><span>🇳🇬 Enugu, Nigeria</span><button onclick="travel('Enugu','Nigeria')">FLY</button></div><div class="travelCard"><span>🇳🇬 Kano, Nigeria</span><button onclick="travel('Kano','Nigeria')">FLY</button></div>
+    <div class="travelCard"><span>🇦🇪 Dubai, UAE</span><button onclick="travel('Dubai','UAE')">FLY</button></div>
+    <div class="travelCard"><span>🇬🇧 London, UK · possible snow ❄️</span><button onclick="travel('London','UK')">FLY</button></div>
+    <div class="travelCard"><span>🇪🇸 Madrid, Spain</span><button onclick="travel('Madrid','Spain')">FLY</button></div>
+    <div class="travelCard"><span>🇫🇷 Paris, France</span><button onclick="travel('Paris','France')">FLY</button></div>
+    <div class="travelCard"><span>🇳🇱 Amsterdam, Netherlands</span><button onclick="travel('Amsterdam','Netherlands')">FLY</button></div>
+    <div class="travelCard"><span>🇨🇦 Toronto, Canada · snow ❄️</span><button onclick="travel('Toronto','Canada')">FLY</button></div>
+    <div class="travelCard"><span>🇺🇸 New York, USA</span><button onclick="travel('New York','USA')">FLY</button></div>
+    <div class="travelCard"><span>🇯🇵 Tokyo, Japan</span><button onclick="travel('Tokyo','Japan')">FLY</button></div>`;
+  renderWorldMap();
+  document.getElementById("world").innerHTML=
+   `<div class="row"><span>World</span><b>${state.location}</b></div>
+    <div class="row"><span>People online</span><b><span class="onlineDot"></span>${state.serverConnected?state.onlineUsers.length:0}</b></div>
+    <div class="onlineCard"><b>👥 NOVA LIVE</b><div class="tiny">${(state.serverConnected?state.onlineUsers.map(u=>`<div class="row"><span><span class="onlineDot"></span>@${u}</span><b>Active</b></div>`).join(""):`<div class="tiny">No live players are connected to this device yet. Connect NOVA LIVE to see real players.</div>`)}</div></div>
+    <div class="onlineCard"><b>✈️ Travel flow</b><div class="tiny">Visa office → airport → check-in → gate → aircraft → destination. The next travel pass will make this a full physical sequence.</div></div>
+    <div class="onlineCard"><b>🏠 Land system</b><div class="tiny">Buy land, place a home, upgrade toward mansions. Persistent online ownership will move to the NOVA backend.</div></div>`;
+
+  document.getElementById("cars").innerHTML=
+   `<div class="row"><span>NOVA City</span><button onclick="buyCar('NOVA City',18000)">✦18,000</button></div>
+    <div class="row"><span>NOVA GT</span><button onclick="buyCar('NOVA GT',85000)">✦85,000</button></div>
+    <div class="row"><span>NOVA Executive</span><button onclick="buyCar('NOVA Executive',140000)">✦140,000</button></div>
+    <div class="row"><span>Aircraft</span><b>Private jets + commercial aircraft planned</b></div>
+    <div class="row"><span>Helicopters</span><b>Helipad visible in airport district</b></div>
+    <div class="row"><span>Traffic</span><b>Luxury + NOVA traffic</b></div>
+    <div class="row"><span>Bicycle</span><button onclick="rideBike()">RIDE</button></div>`;
+
+  document.getElementById("settings").innerHTML=
+   `<div class="row"><span>Camera zoom</span><button onclick="zoomCamera(-2)">−</button><button onclick="zoomCamera(2)">+</button></div>
+    <div class="row"><span>Calm ambience</span><button onclick="toggleAudio()">🔊 ${state.audioOn?"ON":"OFF"}</button></div>
+    <div class="row"><span>Movement</span><b>Left analog</b></div>
+    <div class="row"><span>Look</span><b>Right look pad</b></div>
+    <div class="row"><span>Online presence</span><b><span class="onlineDot"></span>${state.onlineUsers.length} online</b></div>
+    <div class="row"><span>Time</span><b>Live device clock</b></div>
+    <div class="installCard"><b>📲 Add NOVA WORLD to your Home Screen</b>
+      <small>iPhone / iPad: use Share → Add to Home Screen. Android: use the browser menu → Add to Home screen / Install app.</small>
+      <button style="margin-top:9px;width:100%" onclick="installNova()">ADD / INSTALL NOVA WORLD</button>
+    </div>`;
+
+  document.getElementById("profile").innerHTML=
+   `<div class="row"><span>Username</span><b>@${state.user}</b></div>
+    <div class="row"><span>Character</span><b>${state.characterName}</b></div>
+    <div class="row"><span>Date of birth</span><b>${state.dob||"Not set"}</b></div>
+    <div class="row"><span>Age</span><b>${state.age}</b></div>
+    <div class="row"><span>Safety</span><b>${state.age<18?"Youth mode":"18+ mode"}</b></div><div class="onlineCard"><b>🌍 NOVA WORLD IDENTITY</b><div class="tiny">Real-world-inspired countries and cities, with an original NOVA economy, brands, vehicles and social universe.</div></div>`;
+}
+window.sendLiveMessage=()=>{
+  const who=(document.getElementById("msgUser")?.value||"").trim().replace(/^@/,"");
+  const text=(document.getElementById("msgText")?.value||"").trim();
+  if(!who||!text)return toast("Enter a username and message.");
+  state.contacts=[...new Set([...state.contacts,who])];
+  state.messages.push({from:state.user+" → @"+who,text});
+  if(state.serverConnected)sendServer({type:"chat",to:who,text});
+  toast(state.serverConnected?"Message sent to @"+who+" 💬":"Message saved locally · NOVA LIVE is offline");
+  renderPhone();
+}
+window.refreshOnlineUsers=()=>{if(!state.serverConnected)return toast("NOVA LIVE is not connected yet.");toast("Live players refreshed · "+state.onlineUsers.length+" online");renderPhone();}
+window.sendPlayerMoney=()=>{
+  const who=(document.getElementById("moneyUser")?.value||"").trim().replace(/^@/,"");
+  const amt=Math.floor(Number(document.getElementById("moneyAmt")?.value||0));
+  if(!who||!amt||amt<1)return toast("Enter a username and amount.");
+  if(state.cash<amt)return toast("Not enough NOVA cash.");
+  state.cash-=amt;
+  state.contacts=[...new Set([...state.contacts,who])];
+  state.messages.push({from:"NOVA Bank",text:`✦${amt.toLocaleString()} sent to @${who}.`});
+  if(state.serverConnected)sendServer({type:"money",to:who,amount:amt});
+  toast("Transfer recorded 💸");
+  renderPhone();
+}
+window.replyMaya=()=>{state.messages.push({from:state.user,text:"Hey Maya! I'm exploring NOVA WORLD right now 👋"});renderPhone();toast("Message queued");}
+window.newMessage=()=>{openPhone("messages");document.getElementById("msgUser")?.focus();}
+window.transfer=(amt)=>{if(state.cash<amt)return toast("Not enough NOVA cash.");state.cash-=amt;state.messages.push({from:"NOVA Bank",text:`Transfer of ✦${amt.toLocaleString()} recorded.`});renderPhone();toast("Transfer complete");}
+
+window.startCareer=(type)=>{
+  const rewards={football:18000,creator:12000,bank:9500,business:16000};
+  const names={football:'Football training',creator:'Content creation shift',bank:'Bank workstation shift',business:'Business development'};
+  if(state.energy<15)return toast('Too tired. Rest first.');
+  toast(names[type]+' started · complete the activity…');
+  setTimeout(()=>{state.energy=Math.max(0,state.energy-15);state.cash+=rewards[type]||5000;toast(names[type]+' complete · +✦'+(rewards[type]||5000).toLocaleString());renderPhone();}, type==='football'?15000:10000);
+};
+window.work=()=>{if(state.energy<12)return toast("Too tired. Rest first.");toast('Work shift started · finish your task…');setTimeout(()=>{state.cash+=2500;state.energy=Math.max(0,state.energy-12);renderPhone();toast('Shift complete · +✦2,500');},10000)}
+window.rest=()=>{state.energy=Math.min(100,state.energy+30);renderPhone();toast("You rested");}
+
+function worldWeather(){
+  if(state.location==="Toronto") return "Snow ❄️";
+  if(state.location==="London"||state.location==="Amsterdam"||state.location==="Paris") return "Cool / cloudy";
+  if(state.location==="Tokyo") return "Clear / humid";
+  return "Warm / tropical";
+}
+window.travel=(city,country)=>{
+  const mode=city===state.location?'same':'travel';
+  state.location=city;state.country=country;document.getElementById("location").textContent=city;
+  applyCityProfile(city);renderPhone();
+  toast(mode==='same'?'You are already here.':city==='Toronto'||city==='London'?'Flight route selected · cold/snow-capable environment ❄️':'Flight route selected · '+city+' ✈️');
+  if(state.serverConnected)sendServer({type:'travel',city,country});
+}
+window.visitImmigration=()=>{
+  if(state.age<18 && state.location==="Lagos"){toast("Immigration office: youth travel flow enabled.");}
+  state.visas.push(state.location);
+  toast("Visa approved for "+state.location+" in the prototype 🛂");
+  renderPhone();
+}
+window.openLand=()=>{openPhone("life");setTimeout(()=>toast("Land & Homes: buy a plot and build upward 🏠"),80);}
+
+document.getElementById("world").innerHTML=
+  `<div class="row"><span>World status</span><b>Living city: ${state.location}</b></div>
+   <div class="row"><span>Weather</span><b>Clear · warm</b></div>
+   <div class="row"><span>Time</span><b>Daytime</b></div>
+   <div class="row"><span>Online layer</span><b>Ready for backend</b></div>`;
+
+document.getElementById("cars").innerHTML=
+  `<div class="row"><span>NOVA City</span><button onclick="buyCar('NOVA City',18000)">✦18,000</button></div>
+   <div class="row"><span>NOVA GT</span><button onclick="buyCar('NOVA GT',85000)">✦85,000</button></div>
+   <div class="row"><span>NOVA Executive</span><button onclick="buyCar('NOVA Executive',140000)">✦140,000</button></div>
+   <div class="row"><span>Future</span><b>Licensed real brands where permitted</b></div>`;
+
+document.getElementById("settings").innerHTML=`
+  <div class="settingsSection"><h4>Game</h4>
+    <div class="settingRow"><span>Camera zoom<small>Adjust view distance</small></span><span><button onclick="zoomCamera(-2)">−</button> <button onclick="zoomCamera(2)">+</button></span></div>
+    <div class="settingRow"><span>Run / sprint<small>Hold RUN on mobile · Shift on keyboard</small></span><b>ON</b></div>
+    <div class="settingRow"><span>Jump<small>JUMP button · Space on keyboard</small></span><b>ON</b></div>
+  </div>
+  <div class="settingsSection"><h4>Sound & Music</h4>
+    <div class="settingRow"><span>Calm background music<small>Soft, low-volume ambience</small></span><button class="toggle ${state.audioOn?'on':''}" onclick="toggleAudio()">${state.audioOn?'ON':'OFF'}</button></div>
+    <div class="settingRow"><span>World ambience<small>City, beach, stadium and interiors</small></span><b>LOW</b></div>
+    <div class="settingRow"><span>Vehicle / UI sounds<small>Never use harsh default effects</small></span><b>LOW</b></div>
+  </div>
+  <div class="settingsSection"><h4>Online</h4>
+    <div class="settingRow"><span>Connection</span><b>${state.serverConnected?'🟢 LIVE':'⚪ OFFLINE'}</b></div>
+    <div class="settingRow"><span>Online presence</span><b>${state.serverConnected?'LIVE':'LOCAL'}</b></div>
+    <div class="settingRow"><span>Voice notes</span><b>Available online</b></div>
+  </div>
+  <div class="settingsSection"><h4>Controls</h4><div class="settingRow"><span>Movement</span><b>Left analog / WASD</b></div><div class="settingRow"><span>Look</span><b>Right pad / drag</b></div><div class="settingRow"><span>Interact</span><b>E / ACTION</b></div></div>
+  <div class="installCard"><b>📲 Add NOVA WORLD to your Home Screen</b><small>iPhone / iPad: Share → Add to Home Screen. Android: browser menu → Add to Home screen / Install.</small><button style="margin-top:9px;width:100%" onclick="installNova()">ADD / INSTALL</button></div>`;
+
+document.getElementById("profile").innerHTML=
+  `<div class="row"><span>Username</span><b>${state.user}</b></div>
+   <div class="row"><span>Character</span><b>${state.characterName}</b></div>
+   <div class="row"><span>Style</span><b>Original NOVA profile</b></div>`;
+
+window.buyCar=(name,price)=>{
+  if(state.owned.includes(name)) return toast("You already own "+name);
+  if(state.cash<price) return toast("Not enough NOVA cash.");
+  state.cash-=price;state.owned.push(name);const c=spawnOwnedCar(name);c.userData.owned=true;toast('Purchased '+name+' 🚗 It has spawned at your home.');renderPhone();
+};
+window.zoomCamera=(n)=>{dist=Math.max(4,Math.min(22,dist+n));toast("Camera zoom adjusted")};
+window.buyLand=(id,price)=>{
+  if(state.lands.includes(id))return toast("You already own "+id);
+  if(state.cash<price)return toast("Not enough NOVA cash.");
+  state.cash-=price;state.lands.push(id);toast("Land purchased: "+id+" 🏡");renderPhone();
+}
+window.buildBusiness=(name,price)=>{
+  if(state.businesses?.includes(name))return toast('You already own '+name);
+  if(state.cash<price)return toast('Not enough NOVA cash.');
+  state.cash-=price;state.businesses=state.businesses||[];state.businesses.push(name);toast(name+' constructed 🏢');renderPhone();
+}
+window.buyMansion=(name,price)=>{
+  if(state.mansions.includes(name))return toast("You already own "+name);
+  if(state.cash<price)return toast("Not enough NOVA cash.");
+  state.cash-=price;state.mansions.push(name);state.homes.push(name);toast(name+" purchased 🏰");renderPhone();
+}
+function openLand(){
+  document.getElementById("life").innerHTML=
+   `<div class="onlineCard"><b>🏗️ NOVA LAND MARKET</b><div class="tiny">Buy a plot, then build your home. This is local prototype ownership for now.</div></div>
+    <div class="landCard"><span>Waterfront Plot<br><small>Near the beach</small></span><button onclick="buyLand('Waterfront Plot',50000)">✦50,000</button></div>
+    <div class="landCard"><span>City Plot<br><small>Central district</small></span><button onclick="buyLand('City Plot',80000)">✦80,000</button></div>
+    <div class="landCard"><span>Hillside Plot<br><small>Quiet premium area</small></span><button onclick="buyLand('Hillside Plot',120000)">✦120,000</button></div>
+    <div class="landCard"><span>Modern Mansion</span><button onclick="buyMansion('Modern Mansion',25000000)">✦25,000,000</button></div>
+    <div class="landCard"><span>Skyline Mansion</span><button onclick="buyMansion('Skyline Mansion',75000000)">✦75,000,000</button></div>
+    <div class="landCard"><span>Retail Shop Build</span><button onclick="buildBusiness('Retail Shop',180000)">✦180,000</button></div>
+    <div class="landCard"><span>Office Building</span><button onclick="buildBusiness('Office Building',650000)">✦650,000</button></div>
+    <div class="landCard"><span>Mini Mall</span><button onclick="buildBusiness('Mini Mall',1200000)">✦1,200,000</button></div>
+    <div class="tiny">Owned land: ${state.lands.join(", ")||"None"}<br>Owned mansions: ${state.mansions.join(", ")||"None"}<br>Businesses: ${state.businesses.join(", ")||"None"}</div>`;
+}
+
+
+
+
+let deferredInstallPrompt=null;
+window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstallPrompt=e;});
+window.installNova=async()=>{
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    try{await deferredInstallPrompt.userChoice;}catch(e){}
+    deferredInstallPrompt=null;
+    return;
+  }
+  const isiOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  toast(isiOS?"iPhone/iPad: Share → Add to Home Screen 📲":"Use your browser menu → Add to Home screen / Install app 📲");
+};
+
+let audioCtx=null,masterGain=null,engineOsc=null,engineGain=null,lastFootstep=0;
+function startAudio(){if(audioCtx)return;const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;audioCtx=new AC();masterGain=audioCtx.createGain();masterGain.gain.value=0;masterGain.connect(audioCtx.destination);const filter=audioCtx.createBiquadFilter();filter.type='lowpass';filter.frequency.value=1200;filter.Q.value=.35;filter.connect(masterGain);const a=audioCtx.createOscillator(),ag=audioCtx.createGain();a.type='sine';a.frequency.value=174;ag.gain.value=.008;a.connect(ag);ag.connect(filter);a.start();const b=audioCtx.createOscillator(),bg=audioCtx.createGain();b.type='sine';b.frequency.value=261.63;bg.gain.value=.004;b.connect(bg);bg.connect(filter);b.start();state.audioStarted=true;}
+function ensureAudio(){if(!audioCtx)startAudio();if(audioCtx?.state==='suspended')audioCtx.resume();if(state.audioOn===false){state.audioOn=true;if(masterGain)masterGain.gain.setTargetAtTime(.035,audioCtx.currentTime,.05);}}
+function shortSound(freq,dur,gain=.018,type='sine'){try{ensureAudio();if(!audioCtx)return;const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type=type;o.frequency.value=freq;g.gain.setValueAtTime(.0001,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(gain,audioCtx.currentTime+.008);g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+dur);o.connect(g);g.connect(masterGain);o.start();o.stop(audioCtx.currentTime+dur+.02);}catch(e){}}
+function soundJump(){shortSound(520,.11,.022,'triangle')}function soundStep(running){shortSound(running?145:120,.055,running?.018:.012,'square')}
+function updateFootsteps(now,moving){if(!state.audioOn||!audioCtx||!moving||state.inCar)return;const interval=sprintHeld?240:360;if(now-lastFootstep>interval){lastFootstep=now;soundStep(sprintHeld);}}
+function updateEngineSound(moving){if(!state.audioOn||!audioCtx||!state.inCar){if(engineGain&&audioCtx)engineGain.gain.setTargetAtTime(0,audioCtx.currentTime,.08);return;}if(!engineOsc){engineOsc=audioCtx.createOscillator();engineGain=audioCtx.createGain();engineOsc.type='sawtooth';engineGain.gain.value=0;engineOsc.connect(engineGain);engineGain.connect(masterGain);engineOsc.start();}engineOsc.frequency.setTargetAtTime(70+(moving?55:0),audioCtx.currentTime,.08);engineGain.gain.setTargetAtTime(moving?.018:.006,audioCtx.currentTime,.08);}
+window.toggleAudio=()=>{if(!audioCtx)startAudio();state.audioOn=!state.audioOn;if(audioCtx?.state==='suspended')audioCtx.resume();if(masterGain)masterGain.gain.setTargetAtTime(state.audioOn?.035:0,audioCtx.currentTime,.05);toast(state.audioOn?'Calm world audio ON 🔊':'World audio OFF');renderPhone();};
+
+function togglePhone(){const p=document.getElementById("phone");if(!p)return;p.style.display=(p.style.display==="block"?"none":"block");if(p.style.display==="block")renderPhone();}
+function openPhone(tab){document.getElementById("phone").style.display="block";renderPhone();document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));document.getElementById(tab).classList.add("active")}
+document.getElementById("phoneBtn").onclick=togglePhone;document.getElementById("closePhone").onclick=togglePhone;
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>openPhone(b.dataset.tab));
+
+document.querySelectorAll('.genderBtn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.genderBtn').forEach(x=>x.classList.remove('selected'));b.classList.add('selected');state.gender=b.dataset.gender;}));
+
+document.getElementById("customizeBtn").onclick=()=>{document.getElementById("customize").style.display="flex";refreshCharacterPreview();};
+document.getElementById("closeCustomize").onclick=()=>document.getElementById("customize").style.display="none";
+
+function refreshCharacterPreview(){
+  const h=document.getElementById('previewHead'), b=document.getElementById('previewBody');
+  if(h) h.style.background='#'+state.skin.toString(16).padStart(6,'0');
+  if(b) b.style.background='#'+state.outfit.toString(16).padStart(6,'0');
+  document.querySelectorAll('.colorSwatch').forEach(x=>x.classList.remove('selectedSwatch'));
+}
+
+document.querySelectorAll(".skin").forEach(b=>b.onclick=()=>{state.skin=parseInt(b.dataset.skin);applyCharacter();refreshCharacterPreview()});
+document.querySelectorAll(".outfit").forEach(b=>b.onclick=()=>{state.outfit=parseInt(b.dataset.outfit);applyCharacter();refreshCharacterPreview()});
+document.querySelectorAll(".hair").forEach(b=>b.onclick=()=>{state.hair=parseInt(b.dataset.hair);applyCharacter();});
+document.getElementById("saveCharacter").onclick=()=>{
+  state.characterName=document.getElementById("charName").value.trim()||state.user;
+  localStorage.setItem("nova_character",JSON.stringify({name:state.characterName,skin:state.skin,outfit:state.outfit,hair:state.hair}));
+  document.getElementById("customize").style.display="none";toast("Character saved ✨");
+};
+
+
+const cityProfiles={
+ Lagos:{sky:0x86a9bd,ground:0x263c32,water:0x1d6680,weather:'Warm / tropical'},
+ Abuja:{sky:0x9aaea5,ground:0x48553f,water:0x2c6270,weather:'Warm / dry'},
+ 'Port Harcourt':{sky:0x7f9b9b,ground:0x294b39,water:0x1d6475,weather:'Humid / rainy'},
+ Enugu:{sky:0x91a6a0,ground:0x40543d,water:0x2a6170,weather:'Green / warm'},
+ Kano:{sky:0xb5a27d,ground:0x6b5a42,water:0x315a63,weather:'Hot / dry'},
+ Dubai:{sky:0xc9a27b,ground:0x9c825f,water:0x1c6172,weather:'Hot / clear'},
+ London:{sky:0x75818b,ground:0x3b4a3b,water:0x315d70,weather:'Cool / cloudy'},
+ Paris:{sky:0x8394a0,ground:0x405244,water:0x416a7b,weather:'Cool / mild'},
+ Amsterdam:{sky:0x7c929c,ground:0x405343,water:0x315f6f,weather:'Cool / cloudy'},
+ Madrid:{sky:0x9aa1a4,ground:0x4b5a3b,water:0x356579,weather:'Dry / sunny'},
+ Toronto:{sky:0x687783,ground:0x58605b,water:0x355a69,weather:'Cold / snow possible'},
+ 'New York':{sky:0x7f9099,ground:0x39423c,water:0x2c5b6b,weather:'Cool / variable'},
+ Tokyo:{sky:0x6e5a86,ground:0x3d3a4a,water:0x31556f,weather:'Sakura / purple leaf season'}
+};
+function applyCityProfile(city){const p=cityProfiles[city]||cityProfiles.Lagos;ground.material.color.setHex(p.ground);water.material.color.setHex(p.water);scene.background.setHex(p.sky);document.getElementById('worldBanner').textContent=city.toUpperCase()+' · '+p.weather.toUpperCase();updateCityDecor();}
+let mapZoomLevel=1;window.mapZoom=(n)=>{mapZoomLevel=Math.max(.8,Math.min(3,mapZoomLevel+n*.25));renderWorldMap();};
+async function renderWorldMap(){const host=document.getElementById('worldMapSvg');if(!host)return;try{const d3=await import('https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm');const world=await import('https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json/+esm');const topo=world.default;const countries=d3.geoNaturalEarth1();const svg=d3.select(host).html('').append('svg').attr('viewBox','0 0 900 420').attr('aria-label','Interactive world map');const geo=await import('https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/+esm');const fc=geo.feature(topo,topo.objects.countries);countries.fitSize([900*mapZoomLevel,420*mapZoomLevel],fc);const path=d3.geoPath(countries);svg.append('g').selectAll('path').data(fc.features).join('path').attr('class','mapCountry').attr('d',path);const pts=[['Lagos',3.38,6.52],['Dubai',55.27,25.20],['London',-0.13,51.51],['Madrid',-3.70,40.42],['Paris',2.35,48.86],['Amsterdam',4.90,52.37],['Toronto',-79.38,43.65],['New York',-74.01,40.71],['Tokyo',139.69,35.68]];const proj=countries;const g=svg.append('g');pts.forEach(([name,lon,lat])=>{const xy=proj([lon,lat]);if(!xy)return;g.append('circle').attr('class','mapMarker').attr('r',4).attr('cx',xy[0]).attr('cy',xy[1]);g.append('text').attr('class','mapLabel').attr('x',xy[0]+6).attr('y',xy[1]-5).text(name);});}catch(e){host.innerHTML='<div class="tiny" style="padding:18px">World map needs an internet connection to load. Travel controls remain available below.</div>';}}
+
+const NOVA_SERVER_URL=(window.NOVA_SERVER_URL||'').trim();let ws=null;
+function sendServer(payload){if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(payload));}
+function connectNovaOnline(){if(!NOVA_SERVER_URL){state.serverConnected=false;return;}try{ws=new WebSocket(NOVA_SERVER_URL);ws.onopen=()=>{sendServer({type:'register',username:state.user,password:document.getElementById('password')?.value||'change-this-password',gender:state.gender,dob:state.dob});};ws.onclose=()=>{state.serverConnected=false;renderPhone();};ws.onerror=()=>{state.serverConnected=false;};ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='auth_ok'){state.serverConnected=true;state.cash=Number(m.cash||state.cash);sendServer({type:'hello',username:state.user,gender:state.gender,location:state.location,skin:state.skin,outfit:state.outfit,hair:state.hair});toast('NOVA LIVE connected 🟢');renderPhone();}if(m.type==='auth_error'){sendServer({type:'login',username:state.user,password:document.getElementById('password')?.value||''});}if(m.type==='presence'){state.onlineUsers=m.users||[];renderPhone();}if(m.type==='players'){for(const p of (m.players||[]))syncRemotePlayer(p);}if(m.type==='player_move'){syncRemotePlayer(m.player);}if(m.type==='chat'){state.messages.push({from:'@'+m.from,text:m.text});renderPhone();}if(m.type==='money'){state.messages.push({from:'NOVA Bank',text:`✦${Number(m.amount).toLocaleString()} received from @${m.from}`});state.cash=Number(m.cash||state.cash);renderPhone();}if(m.type==='money_sent'){state.cash=Number(m.cash||state.cash);renderPhone();}if(m.type==='voice'){state.messages.push({from:'🎙️ @'+m.from,text:'Voice note received'});renderPhone();playVoiceNote(m.audio);}if(m.type==='error')toast(m.message||'NOVA LIVE error');}catch(err){}};}catch(e){state.serverConnected=false;}}
+function syncRemotePlayer(p){let g=state.remotePlayers.get(p.id);if(!g){g=makePerson(p.skin||0x9b6547,p.outfit||0x2563eb,p.hair||0x17120f);scene.add(g);state.remotePlayers.set(p.id,g);}g.position.set(p.x||0,0,p.z||0);g.rotation.y=p.ry||0;g.userData.remoteName=p.username;}
+let mediaRecorder=null,voiceChunks=[];window.recordVoice=async()=>{if(!state.serverConnected)return toast('Connect to NOVA LIVE first.');if(mediaRecorder?.state==='recording'){mediaRecorder.stop();return;}try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});voiceChunks=[];mediaRecorder=new MediaRecorder(stream,{mimeType:'audio/webm'});mediaRecorder.ondataavailable=e=>{if(e.data.size)voiceChunks.push(e.data)};mediaRecorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const blob=new Blob(voiceChunks,{type:'audio/webm'});if(blob.size>260000)return toast('Voice note is too large. Keep it short.');const reader=new FileReader();reader.onload=()=>sendServer({type:'voice',to:document.getElementById('msgUser')?.value.replace(/^@/,'')||'',audio:reader.result});reader.readAsDataURL(blob);};mediaRecorder.start();toast('Recording voice note… tap again to send.');}catch(e){toast('Microphone permission is required for voice notes.');}};
+function playVoiceNote(data){try{const a=new Audio(data);a.volume=.35;a.play().catch(()=>{});}catch(e){}}
+document.getElementById("enterBtn").onclick=()=>{
+  const u=document.getElementById("username").value.trim()||"Bright";
+  state.user=u;
+  state.cash=250000;
+  state.dob=document.getElementById("dob").value||"";
+  state.gender=document.querySelector(".genderBtn.selected")?.dataset.gender||"male";
+  state.age=getAge(state.dob);
+  document.getElementById("hudUser").textContent=u;
+  document.getElementById("entry").style.display="none";
+  applyCityProfile(state.location);connectNovaOnline();
+  toast("Welcome to NOVA WORLD, "+u+" 🌍 · ✦50,000 NOVA Welcome Bonus");
+};
+document.getElementById("username").value=localStorage.getItem("nova_user")||"";document.getElementById("dob").value=localStorage.getItem("nova_dob")||"";
+try{const c=JSON.parse(localStorage.getItem("nova_character")||"null");if(c){state.characterName=c.name||"Player";state.skin=c.skin||state.skin;state.outfit=c.outfit||state.outfit;state.hair=c.hair||state.hair;applyCharacter();document.getElementById("charName").value=state.characterName}}catch(e){}
+document.getElementById("enterBtn").addEventListener("click",()=>{localStorage.setItem("nova_user",state.user);localStorage.setItem("nova_dob",state.dob);});
+
+
+
+// Live device time + world atmosphere.
+function getAge(dob){
+  if(!dob) return 18;
+  const b=new Date(dob+"T00:00:00"), now=new Date();
+  let age=now.getFullYear()-b.getFullYear();
+  const md=now.getMonth()-b.getMonth();
+  if(md<0 || (md===0 && now.getDate()<b.getDate())) age--;
+  return Math.max(0,age);
+}
+
+const sunDisc=new THREE.Mesh(new THREE.SphereGeometry(5,20,16),new THREE.MeshBasicMaterial({color:0xffe39a}));
+sunDisc.position.set(100,180,-180);scene.add(sunDisc);
+const cloudGroup=new THREE.Group();scene.add(cloudGroup);
+for(let i=0;i<12;i++){const c=new THREE.Mesh(new THREE.SphereGeometry(7+Math.random()*5,10,8),new THREE.MeshStandardMaterial({color:0xdbe5e8,transparent:true,opacity:.42,roughness:1}));c.scale.y=.45;c.position.set((Math.random()*2-1)*260,75+Math.random()*35,(Math.random()*2-1)*260);cloudGroup.add(c);}
+const rainGroup=new THREE.Group();scene.add(rainGroup);
+for(let i=0;i<(isMobileDevice?35:90);i++){const r=new THREE.Mesh(new THREE.BoxGeometry(.025,2.2,.025),new THREE.MeshBasicMaterial({color:0x9cc7df,transparent:true,opacity:.5}));r.position.set((Math.random()*2-1)*260,Math.random()*55,(Math.random()*2-1)*260);rainGroup.add(r);}
+let weatherMode='clear';
+function setWeather(mode){weatherMode=mode;rainGroup.visible=mode==='rain';cloudGroup.visible=mode!=='clear';scene.fog.density=mode==='fog'?.0012:mode==='rain'?.0010:.0007;const wb=document.getElementById('weatherBadge');if(wb)wb.textContent=mode.toUpperCase()+(mode==='rain'?' 🌧️':'');}
+setInterval(()=>{const modes=['clear','cloudy','rain','clear','clear','fog'];setWeather(modes[Math.floor(Math.random()*modes.length)]);},60000);
+
+const dayColor=new THREE.Color(0x86a9bd),nightColor=new THREE.Color(0x142338);
+function updateWorldAtmosphere(){const h=new Date().getHours();const isNight=h<6||h>=19;const target=isNight?nightColor:dayColor;scene.background.lerp(target,.035);scene.fog.color.lerp(target,.035);
+  sun.intensity=isNight?.38:2.0;updateStreetLights();updateVehicleLights();if(isNight){renderer.toneMappingExposure=.72}else renderer.toneMappingExposure=1.0;
+}
+
+// Real device clock + game clock: always follows the player's local device time.
+function updateClocks(){const d=new Date();const t=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});document.getElementById('clock').textContent=t;const pt=document.getElementById('phoneTime');if(pt)pt.textContent=t;const h=d.getHours();const phase=h<6||h>=19?'NIGHT':h>=18?'EVENING':h>=12?'AFTERNOON':'MORNING';const wb=document.getElementById('weatherBadge');if(wb&&!weatherMode)wb.textContent=phase;}setInterval(updateClocks,1000);updateClocks();
+// Touch analogue stick.
+const joy=document.getElementById('joystick'),stick=document.getElementById('stick');let joyId=null;function joyMove(e){const r=joy.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;let dx=e.clientX-cx,dy=e.clientY-cy;const m=42,len=Math.hypot(dx,dy)||1;if(len>m){dx=dx/len*m;dy=dy/len*m}stick.style.transform=`translate(${dx}px,${dy}px)`;state.joystick.x=dx/m;state.joystick.y=dy/m;}joy.addEventListener('pointerdown',e=>{joyId=e.pointerId;joy.setPointerCapture(joyId);joyMove(e);ensureAudio()});joy.addEventListener('pointermove',e=>{if(e.pointerId===joyId)joyMove(e)});joy.addEventListener('pointerup',e=>{if(e.pointerId===joyId){joyId=null;stick.style.transform='translate(0,0)';state.joystick.x=0;state.joystick.y=0}});
+document.getElementById('actionBtn').onclick=()=>{ if(player.position.distanceTo(football.position)<7) kickFootball(); else interact(); };
+const holdRun=document.getElementById('runBtn');holdRun.addEventListener('pointerdown',e=>{e.preventDefault();holdRun.setPointerCapture?.(e.pointerId);sprintHeld=true;ensureAudio();});['pointerup','pointercancel','lostpointercapture'].forEach(ev=>holdRun.addEventListener(ev,()=>sprintHeld=false));
+document.getElementById('jumpBtn').addEventListener('pointerdown',e=>{e.preventDefault();requestJump()});
+document.getElementById('hornBtn').addEventListener('pointerdown',e=>{e.preventDefault();horn()});
+document.getElementById('lightsBtn').addEventListener('pointerdown',e=>{e.preventDefault();toggleHeadlights()});
+
+
+
+const lookpad=document.getElementById("lookpad"),lookDot=document.getElementById("lookDot");
+let lookId=null,lastLX=0,lastLY=0;
+function resetLook(){lookDot.style.transform="translate(0,0)";}
+lookpad.addEventListener("pointerdown",e=>{lookId=e.pointerId;lastLX=e.clientX;lastLY=e.clientY;lookpad.setPointerCapture(lookId);});
+lookpad.addEventListener("pointermove",e=>{
+  if(e.pointerId!==lookId)return;
+  const dx=e.clientX-lastLX,dy=e.clientY-lastLY;lastLX=e.clientX;lastLY=e.clientY;
+  yaw-=dx*.012; pitchCam=Math.max(-1.15,Math.min(1.05,pitchCam+dy*.008));
+  const r=lookpad.getBoundingClientRect();const ox=Math.max(-42,Math.min(42,e.clientX-(r.left+r.width/2)));const oy=Math.max(-42,Math.min(42,e.clientY-(r.top+r.height/2)));lookDot.style.transform=`translate(${ox}px,${oy}px)`;
+});
+lookpad.addEventListener("pointerup",()=>{lookId=null;resetLook();});
+lookpad.addEventListener("pointercancel",()=>{lookId=null;resetLook();});
+
+let last=performance.now();
+function animate(now){
+  requestAnimationFrame(animate);const dt=Math.min(.04,(now-last)/1000);last=now;
+  movePlayer(dt); updateWorldAtmosphere(); updateFootsteps(now,!!(state.joystick.x||state.joystick.y||keys.w||keys.a||keys.s||keys.d||keys.arrowup||keys.arrowdown||keys.arrowleft||keys.arrowright)); updateEngineSound(!!(state.inCar&&(keys.w||keys.s||keys.arrowup||keys.arrowdown||state.joystick.y))); if(state.serverConnected && (Math.floor(now/100)%2===0)) sendServer({type:"move",x:player.position.x,z:player.position.z,ry:player.rotation.y,location:state.location}); const ni=nearest(); const ie=document.getElementById('interaction'); if(ni&&ni.d<11&&!state.inCar){ie.style.display='block';ie.textContent=ni.type==='car'?'E · ENTER '+ni.obj.userData.name:'E · ENTER '+(ni.obj.userData?.name||ni.type.toUpperCase())}else if(state.inCar){ie.style.display='block';ie.textContent='E · EXIT VEHICLE'}else ie.style.display='none';
+  if(ballVel.lengthSq()>0.001){football.position.addScaledVector(ballVel,dt);ballVel.y-=9.8*dt; if(football.position.y<.32){football.position.y=.32;ballVel.y*=-.42;ballVel.multiplyScalar(.82);} }
+  rainGroup.children.forEach(r=>{if(weatherMode==='rain'){r.position.y-=dt*28;if(r.position.y<0)r.position.y=65;}});
+  cloudGroup.position.x=Math.sin(now*.00001)*25;purpleLeaves.forEach(l=>{if(l.visible){l.position.y=Math.max(.05,l.position.y-dt*.45);l.position.x+=l.userData.vx*dt;l.position.z+=l.userData.vz*dt;if(l.position.y<.06||Math.abs(l.position.x)>260||Math.abs(l.position.z)>260){l.position.set((Math.random()*2-1)*230,12+Math.random()*8,(Math.random()*2-1)*230);}}});snowParticles.forEach(l=>{if(l.visible){l.position.y-=dt*2.2;if(l.position.y<.05)l.position.y=35;}});
+  npcs.forEach((n,i)=>{n.userData.a+=dt*n.userData.s*.7;n.position.x+=Math.sin(n.userData.a+i)*dt*1.8;n.position.z+=Math.cos(n.userData.a*.8+i)*dt*1.4;n.rotation.y=Math.sin(n.userData.a)*.5});
+  footballers.forEach((f,i)=>{f.userData.a+=dt*.8;f.position.x+=Math.sin(f.userData.a+i)*dt*.8;f.rotation.y=Math.sin(f.userData.a)*.7;animateHuman(f,true,dt);});
+  partyNPCs.forEach((p,i)=>{p.userData.phase+=dt*3.2;p.position.y=Math.max(0,Math.abs(Math.sin(p.userData.phase))*0.08);p.rotation.y=Math.sin(p.userData.phase)*.55;animateHuman(p,true,dt);});
+  partyLights.forEach((l,i)=>{l.intensity=1.2+Math.sin(now*.004+i)*.8;});
+  sun.position.x=150*Math.cos(now*.00002);sun.position.z=150*Math.sin(now*.00002);
+  updateCamera();
+  document.getElementById("cash").textContent=Math.round(state.cash).toLocaleString();
+  document.getElementById("energy").textContent=Math.round(state.energy);
+  renderer.render(scene,camera);
+}
+requestAnimationFrame(animate);updateCityDecor();updateStreetLights();updateVehicleLights();
+addEventListener("resize",()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+
+// Character hair styles and mood-safe facial presentation.
+state.hairStyle=state.hairStyle||'short';
+function updatePlayerHairStyle(){
+  if(!player)return;
+  if(player.userData.hairStyleGroup) player.remove(player.userData.hairStyleGroup);
+  const g=new THREE.Group(); const mat=new THREE.MeshStandardMaterial({color:state.hair,roughness:.82}); const female=state.gender==='female';
+  if(state.hairStyle==='long' || (female && state.hairStyle==='long')){
+    const back=new THREE.Mesh(new THREE.CylinderGeometry(.34,.44,1.0,12),mat);back.position.set(0,2.18,.12);g.add(back);
+  } else if(state.hairStyle==='ponytail'){
+    const tail=new THREE.Mesh(new THREE.CylinderGeometry(.16,.16,.91,10),mat);tail.position.set(0,2.05,.28);tail.rotation.x=.2;g.add(tail);
+  } else if(state.hairStyle==='bob'){
+    const bob=new THREE.Mesh(new THREE.SphereGeometry(.48,16,10),mat);bob.scale.set(1,.9,1);bob.position.set(0,2.43,0);g.add(bob);
+  } else if(state.hairStyle==='curls'){
+    for(let i=0;i<7;i++){const c=new THREE.Mesh(new THREE.SphereGeometry(.16,10,8),mat);c.position.set((i-3)*.12,2.48+Math.sin(i)*.12,-.02);g.add(c);}
+  } else if(state.hairStyle==='fade'){
+    const top=new THREE.Mesh(new THREE.SphereGeometry(.36,14,8,0,Math.PI*2,0,Math.PI*.45),mat);top.position.y=2.56;g.add(top);
+  }
+  g.userData.hairStyle=true;player.add(g);player.userData.hairStyleGroup=g;
+}
+const __applyCharacter=applyCharacter;applyCharacter=function(){__applyCharacter();updatePlayerHairStyle();};
+document.querySelectorAll('.hairStyleBtn').forEach(b=>b.addEventListener('click',()=>{state.hairStyle=b.dataset.style;updatePlayerHairStyle();toast(state.gender==='female'?'Female style selected':'Hair style selected');}));
+// Give the world visible civic destinations.
+['NOVA General Hospital','NOVA Police HQ','NOVA High Court','NOVA Government House','NOVA Supermarket','NOVA Hotel'].forEach((n,i)=>{const b=buildingDefs.find(x=>x.userData?.name===n);if(b)sign(n,b.position.x,b.position.z-3);});
+// Start the player at the front of their home, not in a roadway.
+setTimeout(()=>{if(!state.inCar){player.position.set(35,0,55);player.rotation.y=Math.PI;player.userData.spawnedAtHome=true;}},50);
+// NPC interaction: approaching a person can produce contextual dialogue.
+const __interact=interact;interact=function(){
+  if(state.inCar){return __interact();}
+  let near=null,bd=4.5; for(const n of npcs){const d=player.position.distanceTo(n.position);if(d<bd){bd=d;near=n;}}
+  if(near){novaNPCDialogue();return;} __interact();
+};
+/* FINAL NOVA WORLD MASTER POLISH LAYER */
+const NOVA_STATES=[
+ ['Abia','Umuahia','🇳🇬'],['Adamawa','Yola','🇳🇬'],['Akwa Ibom','Uyo','🇳🇬'],['Anambra','Awka','🇳🇬'],['Bauchi','Bauchi','🇳🇬'],['Bayelsa','Yenagoa','🇳🇬'],['Benue','Makurdi','🇳🇬'],['Borno','Maiduguri','🇳🇬'],['Cross River','Calabar','🇳🇬'],['Delta','Asaba','🇳🇬'],['Ebonyi','Abakaliki','🇳🇬'],['Edo','Benin City','🇳🇬'],['Ekiti','Ado-Ekiti','🇳🇬'],['Enugu','Enugu','🇳🇬'],['Gombe','Gombe','🇳🇬'],['Imo','Owerri','🇳🇬'],['Jigawa','Dutse','🇳🇬'],['Kaduna','Kaduna','🇳🇬'],['Kano','Kano','🇳🇬'],['Katsina','Katsina','🇳🇬'],['Kebbi','Birnin Kebbi','🇳🇬'],['Kogi','Lokoja','🇳🇬'],['Kwara','Ilorin','🇳🇬'],['Lagos','Ikeja','🇳🇬'],['Nasarawa','Lafia','🇳🇬'],['Niger','Minna','🇳🇬'],['Ogun','Abeokuta','🇳🇬'],['Ondo','Akure','🇳🇬'],['Osun','Osogbo','🇳🇬'],['Oyo','Ibadan','🇳🇬'],['Plateau','Jos','🇳🇬'],['Rivers','Port Harcourt','🇳🇬'],['Sokoto','Sokoto','🇳🇬'],['Taraba','Jalingo','🇳🇬'],['Yobe','Damaturu','🇳🇬'],['Zamfara','Gusau','🇳🇬'],['FCT','Abuja','🇳🇬']
+];
+state.properties=state.properties||JSON.parse(localStorage.getItem('nova_properties')||'[]');
+state.houseStyle=state.houseStyle||'Starter Bungalow';state.houseColor=state.houseColor||'0x263b52';state.tileColor=state.tileColor||'0x6b7280';
+function saveNOVA(){try{localStorage.setItem('nova_properties',JSON.stringify(state.properties));}catch(e){}}
+function propertyCard(p){return `<div class="megaItem"><b>${p.name}</b><small>${p.type} · ${p.furnished?'Furnished':'Unfurnished'} · ${p.city}</small><div class="tiny">Walls: #${String(p.color).replace('0x','')} · Tiles: #${String(p.tiles).replace('0x','')}</div><span class="serviceBadge">OWNED</span></div>`}
+function showMega(section){
+ const host=document.getElementById('megaContent'); if(!host)return;
+ if(section==='homes'){
+  const props=[
+   ['Starter Bungalow','Bungalow',180000,true],['Modern Duplex','Duplex',1200000,true],['Luxury Duplex','Duplex',4200000,false],['Sky Apartment','Apartment',6500000,true],['Executive Mansion','Mansion',25000000,true],['Royal Estate','Estate',75000000,false],['Ultra Penthouse','Penthouse',120000000,true]
+  ];
+  host.innerHTML=`<div class="row"><span>Available NOVA properties</span><b>✦${Math.floor(state.cash).toLocaleString()}</b></div><div class="megaGrid">${props.map((p,i)=>`<div class="megaItem"><b>${p[0]}</b><small>${p[1]} · ${p[3]?'move-in furnished':'design it yourself'} · ${state.location}</small><button onclick="buyProperty(${i})">BUY · ✦${p[2].toLocaleString()}</button></div>`).join('')}</div><h4>Your properties</h4><div class="megaGrid">${state.properties.length?state.properties.map(propertyCard).join(''):'<div class="megaItem"><b>No property yet</b><small>Work, save NOVA Cash, then buy a home or land.</small></div>'}</div><h4>Design studio</h4><div class="megaItem"><b>House colors & tiles</b><small>Choose wall colors and tile/floor colors for your owned property.</small><div class="tiny">WALLS</div><div class="propertySwatches">${['263b52','6b3f32','315d47','6b5ca5','c7a75b','e5e7eb','111827'].map(c=>`<button style="background:#${c}" onclick="paintOwned('${c}')"></button>`).join('')}</div><div class="tiny" style="margin-top:8px">TILES</div><div class="propertySwatches">${['8b7355','6b7280','d1d5db','1f2937','b7a06a'].map(c=>`<button style="background:#${c}" onclick="tileOwned('${c}')"></button>`).join('')}</div></div>`;
+ }else if(section==='civic'){
+  host.innerHTML=`<div class="megaGrid">
+   <div class="megaItem"><b>🏥 NOVA Hospital</b><small>Medical services, emergency response and recovery. Non-graphic health consequences can affect your day and energy.</small><button onclick="toast('Hospital services available 🏥')">VISIT</button></div>
+   <div class="megaItem"><b>👮 NOVA Police</b><small>Security careers, patrols, reports and investigations are part of the civic simulation.</small><button onclick="toast('Police career path opened 👮')">CAREER</button></div>
+   <div class="megaItem"><b>🚁 NOVA Air Force</b><small>Future aviation/security career path with helicopters and aircraft operations.</small><button onclick="toast('Air Force path selected 🚁')">JOIN PATH</button></div>
+   <div class="megaItem"><b>⚖️ NOVA High Court</b><small>Cases, hearings and legal consequences can connect the world together.</small><button onclick="toast('Court services opened ⚖️')">ENTER</button></div>
+   <div class="megaItem"><b>🗳️ NOVA Elections</b><small>Citizens can participate in civic life; political leadership is a progression system for future online/world simulation.</small><button onclick="toast('Election board opened 🗳️')">VIEW</button></div>
+   <div class="megaItem"><b>🏦 Bank NOVA</b><small>Work, save and move money through the fictional NOVA economy.</small><button onclick="openPhone('bank')">BANK</button></div>
+  </div><div class="dialogBubble"><b>Living-world rule</b>Hospitals, police, courts and government buildings are world systems—not just decoration. Detailed career and legal simulation can expand as the world grows.</div>`;
+ }else{
+  host.innerHTML=`<div class="row"><span>Travel principle</span><b>Board · Fly · Arrive</b></div><div class="megaGrid"><div class="megaItem"><b>✈️ Local flights</b><small>Connect Nigerian airports progressively, including all states as destinations are expanded.</small></div><div class="megaItem"><b>🌍 International flights</b><small>Dubai, London, Madrid, Paris, Amsterdam, Toronto, New York, Tokyo and future destinations use the same travel architecture.</small></div><div class="megaItem"><b>🚗 Ground travel</b><small>Drive, bus and other transport can connect nearby destinations where appropriate.</small></div></div><h4>Nigeria · 36 states + FCT</h4><div class="megaGrid">${NOVA_STATES.map((s,i)=>`<div class="megaItem"><b>${s[2]} ${s[0]}</b><small>Capital / gateway: ${s[1]}</small><button onclick="beginNovaTravel('${s[1]}','Nigeria')">FLY TO ${s[1].toUpperCase()}</button></div>`).join('')}</div>`;
+ }
+}
+window.closeMega=()=>document.getElementById('novaMega').style.display='none';
+window.openMega=()=>{document.getElementById('novaMega').style.display='flex';showMega('homes');};
+window.showMega=showMega;
+document.getElementById('moreWorldBtn')?.addEventListener('click',openMega);
+window.buyProperty=(idx)=>{const props=[['Starter Bungalow','Bungalow',180000,true],['Modern Duplex','Duplex',1200000,true],['Luxury Duplex','Duplex',4200000,false],['Sky Apartment','Apartment',6500000,true],['Executive Mansion','Mansion',25000000,true],['Royal Estate','Estate',75000000,false],['Ultra Penthouse','Penthouse',120000000,true]];const p=props[idx];if(!p)return;if(state.cash<p[2])return toast('Not enough NOVA Cash. Work and save before buying.');state.cash-=p[2];state.properties.push({name:p[0],type:p[1],price:p[2],furnished:p[3],city:state.location,color:state.houseColor,tiles:state.tileColor});saveNOVA();toast(`${p[0]} purchased 🏠 ${p[3]?'Move in immediately.':'Design and furnish it yourself.'}`);showMega('homes');};
+window.paintOwned=(hex)=>{if(!state.properties.length)return toast('Buy a property first.');state.properties[state.properties.length-1].color='0x'+hex;saveNOVA();toast('House color updated 🎨');showMega('homes');};
+window.tileOwned=(hex)=>{if(!state.properties.length)return toast('Buy a property first.');state.properties[state.properties.length-1].tiles='0x'+hex;saveNOVA();toast('Tiles updated 🧱');showMega('homes');};
+const originalTravel=window.travel;
+let novaTravelTimer=null;
+window.cancelNovaTravel=()=>{clearInterval(novaTravelTimer);document.getElementById('novaTravel').style.display='none';toast('Journey cancelled.');};
+window.beginNovaTravel=(city,country)=>{if(city===state.location)return toast('You are already here.');const ov=document.getElementById('novaTravel');ov.style.display='flex';document.getElementById('flightTitle').textContent=`NOVA AIR · ${state.location.toUpperCase()} → ${city.toUpperCase()}`;const phases=['Travel to airport','Check-in complete · security cleared','At the gate · boarding soon','Boarding aircraft · seat secured','In flight ✈️ · cruising to destination','Landing · welcome to '+city];let i=0;document.getElementById('flightPhase').textContent='Airport';document.getElementById('flightStatus').textContent=phases[0];clearInterval(novaTravelTimer);novaTravelTimer=setInterval(()=>{i++;document.getElementById('flightStatus').textContent=phases[Math.min(i,phases.length-1)];document.getElementById('flightPhase').textContent=i<3?'Airport':i<5?'NOVA AIR FLIGHT':'Arrival';if(i>=phases.length-1){clearInterval(novaTravelTimer);setTimeout(()=>{ov.style.display='none';originalTravel(city,country);toast('Arrived in '+city+' ✈️🌍');},900);}},1500);};
+window.travel=window.beginNovaTravel;
+// Expand renderPhone with the final services access while retaining the existing apps.
+const __novaRenderPhone=renderPhone;renderPhone=function(){__novaRenderPhone();};
+// NPC conversation interaction: clicking/approaching NPCs can produce small contextual dialogue.
+function novaNPCDialogue(){const lines=['Welcome to NOVA WORLD.','The city is lively today.','I am heading to work.','Did you see the match tonight?','The airport is busy.','NOVA Bank has been packed today.'];toast(lines[Math.floor(Math.random()*lines.length)]);}
+window.novaNPCDialogue=novaNPCDialogue;
+// Add a small civic shortcut beside the phone when possible.
+const civicBtn=document.createElement('button');civicBtn.id='civicShortcut';civicBtn.textContent='🏛️';civicBtn.title='NOVA civic services';civicBtn.style.cssText='position:fixed;right:18px;top:165px;z-index:18;width:46px;height:46px;border-radius:14px;border:1px solid #ffffff18;background:#071019dd;color:#fff;font-weight:800';civicBtn.onclick=openMega;document.body.appendChild(civicBtn);
+// Account safety notice.
+const pw=document.getElementById('password');if(pw){pw.setAttribute('autocomplete','new-password');pw.minLength=8;pw.title='Use a unique password of at least 8 characters. Never reuse a password from another personal account.';}
+const dob=document.getElementById('dob');if(dob){dob.style.textAlign='center';dob.style.display='block';dob.style.marginInline='auto';}
+// Clear statement: no fake online count while offline.
+const onlineEl=document.getElementById('onlineCount');if(onlineEl)onlineEl.textContent=state.serverConnected?String(state.onlineUsers.length):'0';
